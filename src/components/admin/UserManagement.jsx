@@ -3,101 +3,71 @@ import {
   Search, Filter, Eye, Ban, CheckCircle, User, 
   Phone, MapPin, Package, AlertTriangle, History 
 } from 'lucide-react';
+import { auth, db } from '../../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { collection, query, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 
 const UserManagement = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedUser, setSelectedUser] = useState(null);
   const [showUserModal, setShowUserModal] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const [users, setUsers] = useState([
-    {
-      id: 'USR001',
-      name: 'Rajesh Kumar',
-      phone: '+91 98765 43210',
-      email: 'rajesh@email.com',
-      address: '123, MG Road, Bangalore',
-      totalPickups: 12,
-      activePickups: 2,
-      status: 'active',
-      joinedDate: '2024-08-15',
-      lastActive: '2025-01-02',
-      frequentCancellations: false,
-      pickupHistory: [
-        { id: 'REQ001', date: '2025-01-02', scrapType: 'Plastic', quantity: '15 kg', status: 'pending' },
-        { id: 'REQ015', date: '2024-12-20', scrapType: 'Paper', quantity: '20 kg', status: 'completed' },
-        { id: 'REQ008', date: '2024-11-15', scrapType: 'Metal', quantity: '10 kg', status: 'completed' },
-      ]
-    },
-    {
-      id: 'USR002',
-      name: 'Priya Sharma',
-      phone: '+91 87654 32109',
-      email: 'priya@email.com',
-      address: '456, Koramangala, Bangalore',
-      totalPickups: 8,
-      activePickups: 1,
-      status: 'active',
-      joinedDate: '2024-09-20',
-      lastActive: '2025-01-01',
-      frequentCancellations: false,
-      pickupHistory: [
-        { id: 'REQ002', date: '2025-01-01', scrapType: 'Metal', quantity: '25 kg', status: 'accepted' },
-        { id: 'REQ012', date: '2024-12-15', scrapType: 'Electronics', quantity: '5 kg', status: 'completed' },
-      ]
-    },
-    {
-      id: 'USR003',
-      name: 'Amit Patel',
-      phone: '+91 76543 21098',
-      email: 'amit@email.com',
-      address: '789, Whitefield, Bangalore',
-      totalPickups: 15,
-      activePickups: 0,
-      status: 'active',
-      joinedDate: '2024-06-10',
-      lastActive: '2024-12-28',
-      frequentCancellations: false,
-      pickupHistory: [
-        { id: 'REQ003', date: '2024-12-28', scrapType: 'Electronics', quantity: '8 kg', status: 'completed' },
-        { id: 'REQ010', date: '2024-12-10', scrapType: 'Plastic', quantity: '18 kg', status: 'completed' },
-      ]
-    },
-    {
-      id: 'USR004',
-      name: 'Sneha Reddy',
-      phone: '+91 65432 10987',
-      email: 'sneha@email.com',
-      address: '321, Indiranagar, Bangalore',
-      totalPickups: 3,
-      activePickups: 0,
-      status: 'blocked',
-      joinedDate: '2024-11-01',
-      lastActive: '2024-12-30',
-      frequentCancellations: true,
-      pickupHistory: [
-        { id: 'REQ004', date: '2024-12-30', scrapType: 'Paper', quantity: '30 kg', status: 'denied' },
-        { id: 'REQ009', date: '2024-12-05', scrapType: 'Plastic', quantity: '12 kg', status: 'cancelled' },
-      ]
-    },
-    {
-      id: 'USR005',
-      name: 'Vikram Singh',
-      phone: '+91 54321 09876',
-      email: 'vikram@email.com',
-      address: '654, HSR Layout, Bangalore',
-      totalPickups: 20,
-      activePickups: 1,
-      status: 'active',
-      joinedDate: '2024-05-05',
-      lastActive: '2025-01-03',
-      frequentCancellations: false,
-      pickupHistory: [
-        { id: 'REQ005', date: '2025-01-03', scrapType: 'Metal', quantity: '40 kg', status: 'pending' },
-        { id: 'REQ016', date: '2024-12-25', scrapType: 'Electronics', quantity: '12 kg', status: 'completed' },
-      ]
-    },
-  ]);
+  React.useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
+
+      if (user.email === 'demo@example.com') {
+        setUsers([
+          {
+            id: 'USR001',
+            name: 'Rajesh Kumar',
+            phone: '+91 98765 43210',
+            email: 'rajesh@email.com',
+            address: '123, MG Road, Bangalore',
+            totalPickups: 12,
+            activePickups: 2,
+            status: 'active',
+            joinedDate: '2024-08-15',
+            lastActive: '2025-01-02',
+            frequentCancellations: false,
+            pickupHistory: [
+              { id: 'REQ001', date: '2025-01-02', scrapType: 'Plastic', quantity: '15 kg', status: 'pending' },
+              { id: 'REQ015', date: '2024-12-20', scrapType: 'Paper', quantity: '20 kg', status: 'completed' },
+            ]
+          }
+        ]);
+        setIsLoading(false);
+        return;
+      }
+
+      const q = query(collection(db, "users"));
+      const unsubscribeData = onSnapshot(q, (snapshot) => {
+        const usersList = snapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().displayName || doc.data().name || 'User',
+          ...doc.data(),
+          status: doc.data().status || 'active',
+          joinedDate: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString(),
+          lastActive: doc.data().lastLogin?.toDate()?.toISOString() || new Date().toISOString(),
+          totalPickups: 0, // Would need aggregate query for real counts
+          activePickups: 0,
+          pickupHistory: []
+        }));
+        setUsers(usersList);
+        setIsLoading(false);
+      });
+
+      return () => unsubscribeData();
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
 
   const filteredUsers = users.filter(user => {
     const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||

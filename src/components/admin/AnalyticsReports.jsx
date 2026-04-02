@@ -1,54 +1,135 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   TrendingUp, Users, DollarSign, Package, Calendar,
   Download, BarChart3, PieChart, Activity
 } from 'lucide-react';
+import { auth, db } from '../../firebase';
+import { collection, onSnapshot, query, where, orderBy, getDocs, limit } from 'firebase/firestore';
 
 const AnalyticsReports = () => {
   const [dateRange, setDateRange] = useState('week');
-  const [startDate, setStartDate] = useState('2025-01-01');
-  const [endDate, setEndDate] = useState('2025-01-07');
+  const [startDate, setStartDate] = useState(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [loading, setLoading] = useState(true);
 
-  // Mock analytics data
-  const dashboardStats = {
-    totalPickups: 156,
-    pickupsGrowth: 12.5,
-    activeUsers: 89,
-    usersGrowth: 8.3,
-    totalRevenue: 45280,
-    revenueGrowth: 15.7,
-    avgPickupValue: 290,
-    valueGrowth: 5.2,
-  };
+  const [dashboardStats, setDashboardStats] = useState({
+    totalPickups: 0,
+    pickupsGrowth: 0,
+    activeUsers: 0,
+    usersGrowth: 0,
+    totalRevenue: 0,
+    revenueGrowth: 0,
+    avgPickupValue: 0,
+    valueGrowth: 0,
+  });
 
-  const pickupsPerDay = [
-    { date: '2025-01-01', pickups: 18 },
-    { date: '2025-01-02', pickups: 24 },
-    { date: '2025-01-03', pickups: 22 },
-    { date: '2025-01-04', pickups: 28 },
-    { date: '2025-01-05', pickups: 20 },
-    { date: '2025-01-06', pickups: 26 },
-    { date: '2025-01-07', pickups: 18 },
-  ];
+  const [pickupsPerDay, setPickupsPerDay] = useState([]);
+  const [scrapCategoryDistribution, setScrapCategoryDistribution] = useState([]);
+  const [topUsers, setTopUsers] = useState([]);
 
-  const scrapCategoryDistribution = [
-    { category: 'Plastic', count: 45, percentage: 28.8, revenue: 12500 },
-    { category: 'Paper', count: 38, percentage: 24.4, revenue: 8900 },
-    { category: 'Metal', count: 32, percentage: 20.5, revenue: 15600 },
-    { category: 'Electronics', count: 28, percentage: 17.9, revenue: 6800 },
-    { category: 'Glass', count: 13, percentage: 8.3, revenue: 1480 },
-  ];
+  useEffect(() => {
+    const isDemo = auth.currentUser?.email === 'demo@example.com';
+    
+    // Listen to Orders for most stats
+    const qOrders = query(collection(db, "orders"));
+    const unsubscribeOrders = onSnapshot(qOrders, (snapshot) => {
+       const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+       
+       // Calculate Total Pickups
+       const totalPickups = orders.length;
+       
+       // Calculate Total Revenue
+       const totalRevenue = orders
+         .filter(o => o.status === 'completed')
+         .reduce((acc, curr) => {
+            const amtStr = curr.collectedAmount || curr.amount || '0';
+            const amt = parseInt(amtStr.toString().replace(/[^\d]/g, '')) || 0;
+            return acc + amt;
+         }, 0);
 
-  const topUsers = [
-    { name: 'Vikram Singh', pickups: 20, revenue: 5800 },
-    { name: 'Amit Patel', pickups: 15, revenue: 4200 },
-    { name: 'Rajesh Kumar', pickups: 12, revenue: 3600 },
-    { name: 'Priya Sharma', pickups: 8, revenue: 2400 },
-    { name: 'Sneha Reddy', pickups: 3, revenue: 900 },
-  ];
+       // Calculate Avg Pickup Value
+       const completedOrders = orders.filter(o => o.status === 'completed');
+       const avgPickupValue = completedOrders.length > 0 ? Math.round(totalRevenue / completedOrders.length) : 0;
 
-  const maxPickups = Math.max(...pickupsPerDay.map(d => d.pickups));
-  const maxCategory = Math.max(...scrapCategoryDistribution.map(c => c.count));
+       // Calculate Category Distribution
+       const categories = {};
+       orders.forEach(o => {
+          const cat = o.scrapType || 'Other';
+          categories[cat] = (categories[cat] || 0) + 1;
+       });
+       
+       const dist = Object.entries(categories).map(([category, count]) => ({
+          category,
+          count,
+          percentage: Math.round((count / totalPickups) * 100) || 0,
+          revenue: orders.filter(o => o.scrapType === category && o.status === 'completed')
+                    .reduce((acc, curr) => acc + (parseInt((curr.collectedAmount || '0').toString().replace(/[^\d]/g, '')) || 0), 0)
+       })).sort((a, b) => b.count - a.count);
+
+       // Calculate Pickups Per Day (Last 7 days)
+       const daily = {};
+       for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          const dateStr = d.toISOString().split('T')[0];
+          daily[dateStr] = 0;
+       }
+       
+       orders.forEach(o => {
+          const orderDate = o.requestedAt?.split(' ')[0] || o.date;
+          if (daily[orderDate] !== undefined) {
+            daily[orderDate]++;
+          }
+       });
+
+       const dailyChart = Object.entries(daily).map(([date, pickups]) => ({ date, pickups }));
+
+       setDashboardStats(prev => ({
+          ...prev,
+          totalPickups,
+          totalRevenue,
+          avgPickupValue
+       }));
+       setScrapCategoryDistribution(dist);
+       setPickupsPerDay(dailyChart);
+       setLoading(false);
+    });
+
+    // Listen to Users count
+    const qUsers = query(collection(db, "users"));
+    const unsubscribeUsers = onSnapshot(qUsers, (snapshot) => {
+       setDashboardStats(prev => ({
+          ...prev,
+          activeUsers: snapshot.size
+       }));
+    });
+
+    // Top Users logic
+    const fetchTopUsers = async () => {
+       try {
+         const userSnap = await getDocs(query(collection(db, "users"), limit(5)));
+         if (!userSnap.empty) {
+            const top = userSnap.docs.map(doc => ({
+               name: doc.data().displayName || doc.data().userName || doc.data().email || 'Anonymous',
+               pickups: doc.data().pickupsCount || 0,
+               revenue: doc.data().totalSpent || 0
+            })).sort((a, b) => b.pickups - a.pickups);
+            setTopUsers(top);
+         }
+       } catch (err) {
+         console.error("Top users fetch error:", err);
+       }
+    };
+    fetchTopUsers();
+
+    return () => {
+       unsubscribeOrders();
+       unsubscribeUsers();
+    };
+  }, []);
+
+  const maxPickups = pickupsPerDay.length > 0 ? Math.max(...pickupsPerDay.map(d => d.pickups), 1) : 1;
+  const maxCategory = scrapCategoryDistribution.length > 0 ? Math.max(...scrapCategoryDistribution.map(c => c.count), 1) : 1;
 
   const exportReport = (format) => {
     alert(`Exporting report as ${format.toUpperCase()}...`);
@@ -290,7 +371,8 @@ const AnalyticsReports = () => {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {topUsers.map((user, index) => {
-                const activityPercent = (user.pickups / topUsers[0].pickups) * 100;
+                const maxPickups = topUsers[0]?.pickups || 1;
+                const activityPercent = (user.pickups / maxPickups) * 100;
                 return (
                   <tr key={index} className="hover:bg-[#FAFAFA] transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap">

@@ -1,14 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Menu, X, LayoutDashboard, Users, Briefcase, DollarSign, 
   MessageSquare, Settings, ClipboardList, LogOut 
 } from 'lucide-react';
 import { Link, useLocation, Outlet, useNavigate } from 'react-router-dom';
+import { auth, db } from '../../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 const AdminLayout = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [adminProfile, setAdminProfile] = useState({ 
+    name: auth.currentUser?.displayName || 'Admin User', 
+    email: auth.currentUser?.email || 'admin@kabadibecho.com' 
+  });
   const location = useLocation();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setAdminProfile({
+          name: user.displayName || 'Admin User',
+          email: user.email || 'admin@portal.com'
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   const menuItems = [
     { 
@@ -44,7 +62,8 @@ const AdminLayout = () => {
   const handleLogout = () => {
     // Clear authentication token from localStorage
     localStorage.removeItem('token');
-    navigate("/login");
+    auth.signOut(); // Ensure Firebase signout
+    navigate("/admin/login");
   };
 
   return (
@@ -65,8 +84,8 @@ const AdminLayout = () => {
 
         <div className="ml-auto flex items-center gap-4">
           <div className="text-right hidden sm:block">
-            <p className="text-sm font-semibold text-[#5D4037]">Admin User</p>
-            <p className="text-xs text-gray-500">admin@kabadibecho.com</p>
+            <p className="text-sm font-semibold text-[#5D4037]">{adminProfile.name}</p>
+            <p className="text-xs text-gray-500">{adminProfile.email}</p>
           </div>
           <button 
             onClick={handleLogout}

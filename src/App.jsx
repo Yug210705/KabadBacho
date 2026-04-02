@@ -37,22 +37,24 @@ const App = () => {
         <Route path="/about" element={<><Navbar /><AboutUs /></>} />
         <Route path="/contact" element={<><Navbar /><Contact /></>} />
         <Route path="/login" element={<><Navbar /><Login /></>} />
-        <Route path="/Kabadi" element={<Kabadi/>}></Route>
+        <Route path="/admin/login" element={<><Navbar /><Login defaultRole="admin" /></>} />
+        <Route path="/kabadi/login" element={<><Navbar /><Login defaultRole="kabadi" /></>} />
+        <Route path="/Kabadi" element={<ProtectedRoute requiredRole="kabadi"><Kabadi/></ProtectedRoute>}></Route>
         <Route path="/book-pickup" element={<><BookPickup /></>} />
         <Route path="/schedule-pickup" element={<><SchedulePickup /></>} />
 
         {/* USER DASHBOARD (nested) */}
-        <Route path="/dashboard" element={<UserLayout />}>
-  <Route index element={<Dashboard />} />
-  <Route path="pickup" element={<Pickup />} />
-  <Route path="UserService" element={<UserService/>} />
-  <Route path="setting" element={<Setting />} />
-  <Route path="book-pickup" element={<BookPickup/>} />
-</Route>
+        <Route path="/dashboard" element={<ProtectedRoute><UserLayout /></ProtectedRoute>}>
+          <Route index element={<Dashboard />} />
+          <Route path="pickup" element={<Pickup />} />
+          <Route path="UserService" element={<UserService/>} />
+          <Route path="setting" element={<Setting />} />
+          <Route path="book-pickup" element={<BookPickup/>} />
+        </Route>
 
 
         {/* ADMIN routes */}
-        <Route path="/admin" element={<AdminLayout />}>
+        <Route path="/admin" element={<ProtectedRoute requiredRole="admin"><AdminLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/admin/analytics" replace />} />
           <Route path="analytics" element={<AnalyticsReports />} />
           <Route path="requests" element={<UserRequests />} />

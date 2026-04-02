@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Search, Filter, Eye, MessageSquare, AlertCircle, 
   CheckCircle2, Clock, User, FileText, Tag
 } from 'lucide-react';
+import { db, auth } from '../../firebase';
+import { collection, onSnapshot, query, where, doc, updateDoc, addDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 
 const ComplaintsSupport = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -10,8 +12,10 @@ const ComplaintsSupport = () => {
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [selectedComplaint, setSelectedComplaint] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const [complaints, setComplaints] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const [complaints, setComplaints] = useState([
+  const MOCK_COMPLAINTS = [
     {
       id: 'CMP001',
       userId: 'USR001',
@@ -66,40 +70,101 @@ const ComplaintsSupport = () => {
       relatedPickupId: 'REQ003'
     },
     {
-      id: 'CMP004',
-      userId: 'USR005',
-      userName: 'Vikram Singh',
-      phone: '+91 54321 09876',
-      issueType: 'App/Website Issue',
-      subject: 'Unable to schedule pickup',
-      description: 'The website keeps showing error when I try to select a pickup date. Getting "Server Error 500".',
-      status: 'in-progress',
-      priority: 'high',
-      createdAt: '2025-01-05 08:45 AM',
-      updatedAt: '2025-01-05 11:00 AM',
-      assignedTo: 'Tech Team',
-      adminNotes: [
-        { timestamp: '2025-01-05 11:00 AM', note: 'Escalated to development team', admin: 'Admin' }
-      ],
-      relatedPickupId: null
-    },
-    {
-      id: 'CMP005',
-      userId: 'USR004',
-      userName: 'Sneha Reddy',
-      phone: '+91 65432 10987',
-      issueType: 'Service Quality',
-      subject: 'Driver was unprofessional',
-      description: 'The pickup driver was rude and didn\'t handle the items carefully.',
-      status: 'open',
-      priority: 'low',
-      createdAt: '2025-01-05 03:20 PM',
-      updatedAt: '2025-01-05 03:20 PM',
-      assignedTo: null,
-      adminNotes: [],
-      relatedPickupId: 'REQ004'
-    },
-  ]);
+        id: 'CMP004',
+        userId: 'USR005',
+        userName: 'Vikram Singh',
+        phone: '+91 54321 09876',
+        issueType: 'App/Website Issue',
+        subject: 'Unable to schedule pickup',
+        description: 'The website keeps showing error when I try to select a pickup date. Getting "Server Error 500".',
+        status: 'in-progress',
+        priority: 'high',
+        createdAt: '2025-01-05 08:45 AM',
+        updatedAt: '2025-01-05 11:00 AM',
+        assignedTo: 'Tech Team',
+        adminNotes: [
+          { timestamp: '2025-01-05 11:00 AM', note: 'Escalated to development team', admin: 'Admin' }
+        ],
+        relatedPickupId: null
+      },
+      {
+        id: 'CMP005',
+        userId: 'USR004',
+        userName: 'Sneha Reddy',
+        phone: '+91 65432 10987',
+        issueType: 'Service Quality',
+        subject: 'Driver was unprofessional',
+        description: 'The pickup driver was rude and didn\'t handle the items carefully.',
+        status: 'open',
+        priority: 'low',
+        createdAt: '2025-01-05 03:20 PM',
+        updatedAt: '2025-01-05 03:20 PM',
+        assignedTo: null,
+        adminNotes: [],
+        relatedPickupId: 'REQ004'
+      },
+  ];
+
+  useEffect(() => {
+    const isDemo = auth.currentUser?.email === 'demo@example.com';
+    if (isDemo) {
+      setComplaints(MOCK_COMPLAINTS);
+      setLoading(false);
+      return;
+    }
+
+    const q = query(collection(db, "complaints"), orderBy("createdAt", "desc"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+       const list = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          createdAt: doc.data().createdAt?.toDate()?.toLocaleString() || new Date().toLocaleString(),
+          updatedAt: doc.data().updatedAt?.toDate()?.toLocaleString() || new Date().toLocaleString()
+       }));
+       setComplaints(list);
+       setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleUpdateStatus = async (complaintId, newStatus) => {
+    if (auth.currentUser?.email === 'demo@example.com') {
+       setComplaints(complaints.map(c => c.id === complaintId ? { ...c, status: newStatus } : c));
+       return;
+    }
+    try {
+      const docRef = doc(db, "complaints", complaintId);
+      await updateDoc(docRef, { 
+        status: newStatus, 
+        updatedAt: serverTimestamp() 
+      });
+    } catch (e) {
+      console.error("Update status error:", e);
+    }
+  };
+
+  const handleAddNote = async (complaintId, note) => {
+    if (auth.currentUser?.email === 'demo@example.com') {
+        setComplaints(complaints.map(c => c.id === complaintId ? { ...c, adminNotes: [...(c.adminNotes || []), { note, timestamp: new Date().toLocaleString(), admin: 'Admin' }] } : c));
+        return;
+    }
+    try {
+      const complaint = complaints.find(c => c.id === complaintId);
+      const newNotes = [...(complaint.adminNotes || []), { 
+        note, 
+        timestamp: new Date().toLocaleString(), 
+        admin: 'Admin' 
+      }];
+      const docRef = doc(db, "complaints", complaintId);
+      await updateDoc(docRef, { 
+        adminNotes: newNotes, 
+        updatedAt: serverTimestamp() 
+      });
+    } catch (e) {
+      console.error("Add note error:", e);
+    }
+  };
 
   const getStatusColor = (status) => {
     const colors = {
@@ -128,28 +193,6 @@ const ComplaintsSupport = () => {
     return matchesSearch && matchesStatus && matchesPriority;
   });
 
-  const handleUpdateStatus = (complaintId, newStatus) => {
-    setComplaints(complaints.map(c =>
-      c.id === complaintId
-        ? { ...c, status: newStatus, updatedAt: new Date().toLocaleString() }
-        : c
-    ));
-  };
-
-  const handleAddNote = (complaintId, note) => {
-    setComplaints(complaints.map(c =>
-      c.id === complaintId
-        ? {
-            ...c,
-            adminNotes: [
-              ...c.adminNotes,
-              { timestamp: new Date().toLocaleString(), note, admin: 'Admin' }
-            ],
-            updatedAt: new Date().toLocaleString()
-          }
-        : c
-    ));
-  };
 
   const viewComplaintDetails = (complaint) => {
     setSelectedComplaint(complaint);

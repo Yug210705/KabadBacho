@@ -1,8 +1,79 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Search, Filter, Eye, Check, X, Calendar, MapPin, 
-  Phone, User, Package, Clock, ChevronDown 
+  Phone, User, Package, Clock, ChevronDown, Route as RouteIcon
 } from 'lucide-react';
+import RouteOptimizerModal from './RouteOptimizerModal';
+import { auth, db } from '../../firebase';
+import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
+
+const MOCK_REQUESTS = [
+  {
+    id: 'REQ001',
+    userName: 'Rajesh Kumar',
+    phone: '+91 98123 45678',
+    address: 'Rajwada Palace area, Indore',
+    location: { lat: 22.7163, lng: 75.8540 },
+    scrapType: 'Plastic',
+    quantity: 120,
+    preferredDate: '2025-01-05',
+    preferredTime: '10:00 AM - 12:00 PM',
+    status: 'pending',
+    requestedAt: '2025-01-02 09:30 AM',
+  },
+  {
+    id: 'REQ002',
+    userName: 'Priya Sharma',
+    phone: '+91 87654 32109',
+    address: 'Vijay Nagar, Scheme No 54, Indore',
+    location: { lat: 22.7533, lng: 75.8937 },
+    scrapType: 'Metal',
+    quantity: 250,
+    preferredDate: '2025-01-06',
+    preferredTime: '02:00 PM - 04:00 PM',
+    status: 'accepted',
+    requestedAt: '2025-01-01 02:15 PM',
+  },
+  {
+    id: 'REQ003',
+    userName: 'Amit Patel',
+    phone: '+91 76543 21098',
+    address: 'Bhawarkuan Square, Indore',
+    location: { lat: 22.6916, lng: 75.8676 },
+    scrapType: 'Electronics',
+    quantity: 80,
+    preferredDate: '2025-01-04',
+    preferredTime: '11:00 AM - 01:00 PM',
+    status: 'pending',
+    requestedAt: '2024-12-28 11:00 AM',
+  },
+  {
+    id: 'REQ004',
+    userName: 'Sneha Reddy',
+    phone: '+91 65432 10987',
+    address: 'Khajrana Temple Road, Indore',
+    location: { lat: 22.7275, lng: 75.8972 },
+    scrapType: 'Paper',
+    quantity: 300,
+    preferredDate: '2025-01-03',
+    preferredTime: '09:00 AM - 11:00 AM',
+    status: 'pending',
+    requestedAt: '2024-12-30 04:45 PM',
+  },
+  {
+    id: 'REQ005',
+    userName: 'Vikram Singh',
+    phone: '+91 99887 76655',
+    address: 'Palasia, Indore',
+    location: { lat: 22.7244, lng: 75.8839 },
+    scrapType: 'Plastic',
+    quantity: 150,
+    preferredDate: '2025-01-03',
+    preferredTime: '10:00 AM - 12:00 PM',
+    status: 'pending',
+    requestedAt: '2025-01-01 11:00 AM',
+  },
+];
 
 const UserRequests = () => {
   const [selectedStatus, setSelectedStatus] = useState('all');
@@ -11,70 +82,51 @@ const UserRequests = () => {
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [showDenyModal, setShowDenyModal] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showOptimizer, setShowOptimizer] = useState(false);
+  const [requests, setRequests] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Mock data
-  const [requests, setRequests] = useState([
-    {
-      id: 'REQ001',
-      userName: 'Rajesh Kumar',
-      phone: '+91 98765 43210',
-      address: '123, MG Road, Bangalore',
-      location: { lat: 12.9716, lng: 77.5946 },
-      scrapType: 'Plastic & Paper',
-      quantity: '15 kg',
-      preferredDate: '2025-01-05',
-      preferredTime: '10:00 AM - 12:00 PM',
-      status: 'pending',
-      requestedAt: '2025-01-02 09:30 AM',
-      assignedDate: null,
-      completedAt: null,
-    },
-    {
-      id: 'REQ002',
-      userName: 'Priya Sharma',
-      phone: '+91 87654 32109',
-      address: '456, Koramangala, Bangalore',
-      location: { lat: 12.9352, lng: 77.6245 },
-      scrapType: 'Metal',
-      quantity: '25 kg',
-      preferredDate: '2025-01-06',
-      preferredTime: '02:00 PM - 04:00 PM',
-      status: 'accepted',
-      requestedAt: '2025-01-01 02:15 PM',
-      assignedDate: '2025-01-06 02:00 PM',
-      completedAt: null,
-    },
-    {
-      id: 'REQ003',
-      userName: 'Amit Patel',
-      phone: '+91 76543 21098',
-      address: '789, Whitefield, Bangalore',
-      location: { lat: 12.9698, lng: 77.7500 },
-      scrapType: 'Electronics',
-      quantity: '8 kg',
-      preferredDate: '2025-01-04',
-      preferredTime: '03:00 PM - 05:00 PM',
-      status: 'completed',
-      requestedAt: '2024-12-28 11:00 AM',
-      assignedDate: '2025-01-04 03:00 PM',
-      completedAt: '2025-01-04 04:30 PM',
-    },
-    {
-      id: 'REQ004',
-      userName: 'Sneha Reddy',
-      phone: '+91 65432 10987',
-      address: '321, Indiranagar, Bangalore',
-      location: { lat: 12.9716, lng: 77.6412 },
-      scrapType: 'Paper',
-      quantity: '30 kg',
-      preferredDate: '2025-01-03',
-      preferredTime: '09:00 AM - 11:00 AM',
-      status: 'denied',
-      requestedAt: '2024-12-30 04:45 PM',
-      deniedReason: 'Location out of service area',
-      completedAt: null,
-    },
-  ]);
+  // Fetch real data from Firestore
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    if (user.email === 'demo@example.com') {
+      setRequests(MOCK_REQUESTS);
+      setIsLoading(false);
+      return;
+    }
+
+    const q = query(collection(db, "orders"), orderBy("requestedAt", "desc"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const orders = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setRequests(orders);
+      setIsLoading(false);
+    }, (err) => {
+      console.error("Firestore error:", err);
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleUpdateStatus = async (requestId, newStatus, extraData = {}) => {
+    // If it's pure mock data, don't try to update Firestore
+    if (auth.currentUser?.email === 'demo@example.com') {
+       setRequests(requests.map(req => req.id === requestId ? { ...req, status: newStatus, ...extraData } : req));
+       return;
+    }
+    
+    try {
+      const orderRef = doc(db, "orders", requestId);
+      await updateDoc(orderRef, { status: newStatus, ...extraData });
+    } catch (e) {
+      console.error("Failed to update status:", e);
+    }
+  };
 
   const getStatusColor = (status) => {
     const colors = {
@@ -95,16 +147,12 @@ const UserRequests = () => {
   });
 
   const handleAccept = (requestId) => {
-    setRequests(requests.map(req => 
-      req.id === requestId ? { ...req, status: 'accepted' } : req
-    ));
+    handleUpdateStatus(requestId, 'accepted', { assignedDate: new Date().toLocaleString() });
     setShowAssignModal(true);
   };
 
   const handleDeny = (requestId, reason) => {
-    setRequests(requests.map(req => 
-      req.id === requestId ? { ...req, status: 'denied', deniedReason: reason } : req
-    ));
+    handleUpdateStatus(requestId, 'denied', { deniedReason: reason });
     setShowDenyModal(false);
   };
 
@@ -116,15 +164,27 @@ const UserRequests = () => {
           <h1 className="text-2xl font-bold text-[#5D4037]">User Requests Management</h1>
           <p className="text-gray-600 mt-1">Manage scrap pickup requests</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
           <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor('pending')}`}>
             {requests.filter(r => r.status === 'pending').length} Pending
           </span>
           <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor('accepted')}`}>
             {requests.filter(r => r.status === 'accepted').length} Accepted
           </span>
+          <button
+            onClick={() => setShowOptimizer(true)}
+            className="ml-2 flex items-center gap-1 bg-[#4CAF50] hover:bg-[#388E3C] text-white px-4 py-2 rounded-lg font-medium shadow-sm transition"
+          >
+            <RouteIcon size={18} /> Optimize Routes
+          </button>
         </div>
       </div>
+
+      <RouteOptimizerModal 
+        isOpen={showOptimizer} 
+        onClose={() => setShowOptimizer(false)} 
+        requests={requests}
+      />
 
       {/* Filters */}
       <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
@@ -306,6 +366,29 @@ const UserRequests = () => {
             </div>
             
             <div className="p-6 space-y-6">
+              {/* Admin Override Dropdown */}
+              <div className="bg-orange-50 p-4 border border-orange-200 rounded-xl relative">
+                 <div className="absolute top-0 right-0 bg-orange-500 text-white text-[10px] uppercase font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg">Admin Status Override</div>
+                 <label className="block text-sm font-bold text-orange-800 mb-2">Change Status Manually:</label>
+                 <select 
+                   className="w-full p-2 border border-orange-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-500"
+                   value={selectedRequest.status}
+                   onChange={(e) => {
+                     const newStatus = e.target.value;
+                     const extra = {};
+                     if (newStatus === 'completed' && !selectedRequest.completedAt) extra.completedAt = new Date().toLocaleString();
+                     if (newStatus === 'accepted' && !selectedRequest.assignedDate) extra.assignedDate = new Date().toLocaleString();
+                     handleUpdateStatus(selectedRequest.id, newStatus, extra);
+                     setSelectedRequest({ ...selectedRequest, status: newStatus, ...extra });
+                   }}
+                 >
+                    <option value="pending">Pending</option>
+                    <option value="accepted">Accepted</option>
+                    <option value="completed">Completed</option>
+                    <option value="denied">Denied</option>
+                 </select>
+              </div>
+
               {/* Status Timeline */}
               <div className="bg-gray-50 p-4 rounded-lg">
                 <h4 className="font-semibold mb-3 text-gray-700">Status Timeline</h4>

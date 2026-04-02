@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Calendar, Clock, Upload, Phone, CheckCircle, Sparkles, ArrowRight, Truck, X } from 'lucide-react';
+import { auth, db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 const BookPickup = ({ isOpen, onClose }) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const location = useLocation();
   const [formData, setFormData] = useState({
     name: '',
@@ -65,14 +68,37 @@ const BookPickup = ({ isOpen, onClose }) => {
     });
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    const user = auth.currentUser;
+    if (!user) {
+       alert("Please log in to book a pickup!");
+       return;
+    }
+    
     if (formData.scrapType.length === 0) {
       alert("Please select at least one scrap category.");
       return;
     }
-    alert("Pickup scheduled successfully!");
-    onClose();
+
+    setIsSubmitting(true);
+    try {
+       await addDoc(collection(db, "orders"), {
+          ...formData,
+          userId: user.uid,
+          userName: formData.name || user.displayName || 'Anonymous',
+          status: 'pending',
+          requestedAt: serverTimestamp(),
+          scrapType: formData.scrapType.join(', ')
+       });
+       alert("Pickup scheduled successfully! You can track it in your dashboard.");
+       onClose();
+    } catch (err) {
+       console.error("Booking failed:", err);
+       alert("Failed to book pickup. Please try again later.");
+    } finally {
+       setIsSubmitting(false);
+    }
   };
 
   return (

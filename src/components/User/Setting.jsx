@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   User,
   Mail,
@@ -15,6 +15,9 @@ import {
   HelpCircle,
   Settings
 } from 'lucide-react';
+import { auth, db } from '../../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
 const KabadBechoSettings = () => {
   const [activeTab, setActiveTab] = useState('profile');
@@ -22,16 +25,17 @@ const KabadBechoSettings = () => {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const [profileData, setProfileData] = useState({
-    name: 'Rajesh Kumar',
-    email: 'rajesh.kumar@example.com',
-    phone: '9876543210',
-    address: '123 Green Street, Eco City',
-    city: 'Mumbai',
-    state: 'Maharashtra',
-    pincode: '400001',
-    alternatePhone: '9876543211'
+    name: '',
+    email: '',
+    phone: '',
+    address: '',
+    city: '',
+    state: '',
+    pincode: '',
+    alternatePhone: ''
   });
 
   const [passwordData, setPasswordData] = useState({
@@ -49,6 +53,50 @@ const KabadBechoSettings = () => {
     weeklyReport: true
   });
 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) return;
+
+      if (user.email === 'demo@example.com') {
+        setProfileData({
+          name: 'Rajesh Kumar',
+          email: 'rajesh.kumar@example.com',
+          phone: '9876543210',
+          address: '123 Green Street, Eco City',
+          city: 'Mumbai',
+          state: 'Maharashtra',
+          pincode: '400001',
+          alternatePhone: '9876543211'
+        });
+        return;
+      }
+
+      try {
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        if (userDoc.exists()) {
+          const data = userDoc.data();
+          setProfileData(prev => ({
+            ...prev,
+            ...data,
+            name: data.name || data.displayName || prev.name || '',
+            email: data.email || user.email || prev.email || ''
+          }));
+        } else {
+          // Initialize with Auth data if Firestore doc doesn't exist
+          setProfileData(prev => ({
+            ...prev,
+            name: user.displayName || '',
+            email: user.email || ''
+          }));
+        }
+      } catch (err) {
+        console.error("Error fetching profile:", err);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   const handleProfileChange = (e) => {
     setProfileData({ ...profileData, [e.target.name]: e.target.value });
   };
@@ -61,9 +109,25 @@ const KabadBechoSettings = () => {
     setNotifications({ ...notifications, [key]: !notifications[key] });
   };
 
-  const handleSave = () => {
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+  const handleSave = async () => {
+    const user = auth.currentUser;
+    if (!user || user.email === 'demo@example.com') {
+       setSaveSuccess(true);
+       setTimeout(() => setSaveSuccess(false), 3000);
+       return;
+    }
+
+    setIsUpdating(true);
+    try {
+      await setDoc(doc(db, 'users', user.uid), profileData, { merge: true });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err) {
+      console.error("Error saving profile:", err);
+      alert("Failed to save profile. Please try again.");
+    } finally {
+      setIsUpdating(false);
+    }
   };
 
   const quickTabs = [
@@ -149,7 +213,7 @@ const KabadBechoSettings = () => {
                     <div className="flex items-center space-x-6">
                       <div className="relative">
                         <div className="w-24 h-24 bg-linear-to-br from-[#66BB6A] to-[#4CAF50] rounded-full flex items-center justify-center text-white text-3xl font-bold shadow-lg">
-                          {profileData.name.charAt(0)}
+                          {profileData.name?.[0] || profileData.email?.[0]?.toUpperCase() || 'U'}
                         </div>
                         <button className="absolute bottom-0 right-0 w-8 h-8 bg-white border-2 border-[#66BB6A] rounded-full flex items-center justify-center hover:bg-[#E8F5E9] transition-colors duration-300 shadow-md">
                           <Camera size={16} className="text-[#66BB6A]" />

@@ -1,106 +1,113 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Search, Edit2, Save, X, DollarSign, Package, 
   TrendingUp, Calendar, FileText, Download, Truck
 } from 'lucide-react';
+import { db, auth } from '../../firebase';
+import { collection, onSnapshot, query, where, doc, updateDoc, getDocs, setDoc } from 'firebase/firestore';
 
 const PaymentsPricing = () => {
   const [editingPriceId, setEditingPriceId] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState('daily');
+  const [scrapPrices, setScrapPrices] = useState([]);
+  const [paymentRecords, setPaymentRecords] = useState([]);
+  const [revenueData, setRevenueData] = useState({
+     daily: { total: 0, transactions: 0 },
+     monthly: { total: 0, transactions: 0 },
+  });
 
-  const [scrapPrices, setScrapPrices] = useState([
-    { id: 1, category: 'Plastic (PET)', pricePerKg: 20, lastUpdated: '2025-01-01' },
-    { id: 2, category: 'Plastic (HDPE)', pricePerKg: 18, lastUpdated: '2025-01-01' },
-    { id: 3, category: 'Paper (Newspaper)', pricePerKg: 10, lastUpdated: '2024-12-28' },
-    { id: 4, category: 'Paper (Cardboard)', pricePerKg: 8, lastUpdated: '2024-12-28' },
-    { id: 5, category: 'Metal (Iron)', pricePerKg: 25, lastUpdated: '2025-01-02' },
-    { id: 6, category: 'Metal (Aluminum)', pricePerKg: 80, lastUpdated: '2025-01-02' },
-    { id: 7, category: 'Metal (Copper)', pricePerKg: 450, lastUpdated: '2025-01-02' },
-    { id: 8, category: 'Electronics (Small)', pricePerKg: 35, lastUpdated: '2024-12-25' },
-    { id: 9, category: 'Electronics (Large)', pricePerKg: 50, lastUpdated: '2024-12-25' },
-    { id: 10, category: 'Glass', pricePerKg: 5, lastUpdated: '2024-12-20' },
-  ]);
+  const DEFAULT_PRICES = [
+    { category: 'Plastic (PET)', pricePerKg: 20 },
+    { category: 'Plastic (HDPE)', pricePerKg: 18 },
+    { category: 'Paper (Newspaper)', pricePerKg: 10 },
+    { category: 'Paper (Cardboard)', pricePerKg: 8 },
+    { category: 'Metal (Iron)', pricePerKg: 25 },
+    { category: 'Metal (Aluminum)', pricePerKg: 80 },
+    { category: 'Metal (Copper)', pricePerKg: 450 },
+    { category: 'Electronics (Small)', pricePerKg: 35 },
+    { category: 'Electronics (Large)', pricePerKg: 50 },
+    { category: 'Glass', pricePerKg: 5 },
+  ];
 
-  const [paymentRecords] = useState([
-    {
-      id: 'PAY001',
-      pickupId: 'REQ003',
-      userName: 'Amit Patel',
-      scrapType: 'Electronics',
-      quantity: '8 kg',
-      amount: 400,
-      status: 'paid',
-      paymentDate: '2025-01-04',
-      method: 'UPI'
-    },
-    {
-      id: 'PAY002',
-      pickupId: 'REQ015',
-      userName: 'Rajesh Kumar',
-      scrapType: 'Paper',
-      quantity: '20 kg',
-      amount: 200,
-      status: 'paid',
-      paymentDate: '2024-12-20',
-      method: 'Cash'
-    },
-    {
-      id: 'PAY003',
-      pickupId: 'REQ002',
-      userName: 'Priya Sharma',
-      scrapType: 'Metal',
-      quantity: '25 kg',
-      amount: 625,
-      status: 'pending',
-      paymentDate: null,
-      method: null
-    },
-    {
-      id: 'PAY004',
-      pickupId: 'REQ016',
-      userName: 'Vikram Singh',
-      scrapType: 'Electronics',
-      quantity: '12 kg',
-      amount: 600,
-      status: 'paid',
-      paymentDate: '2024-12-25',
-      method: 'Bank Transfer'
-    },
-    {
-      id: 'PAY005',
-      pickupId: 'REQ012',
-      userName: 'Priya Sharma',
-      scrapType: 'Electronics',
-      quantity: '5 kg',
-      amount: 250,
-      status: 'paid',
-      paymentDate: '2024-12-15',
-      method: 'UPI'
-    },
-  ]);
+  useEffect(() => {
+    // 1. Fetch Pricing
+    const unsubscribePricing = onSnapshot(collection(db, "pricing"), (snapshot) => {
+       if (snapshot.empty) {
+          // Initialize if empty
+          DEFAULT_PRICES.forEach(async (p, idx) => {
+             await setDoc(doc(db, "pricing", (idx + 1).toString()), {
+                ...p,
+                lastUpdated: new Date().toISOString()
+             });
+          });
+       } else {
+          setScrapPrices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+       }
+    });
 
-  const revenueData = {
-    daily: { total: 625, transactions: 1 },
-    monthly: { total: 2075, transactions: 5 },
-  };
+    // 2. Fetch Payment Records (Completed Orders)
+    const qPayments = query(collection(db, "orders"), where("status", "in", ["completed", "paid", "accepted"]));
+    const unsubscribePayments = onSnapshot(qPayments, (snapshot) => {
+       const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+       
+       const records = orders.map(o => ({
+          id: 'PAY-' + o.id.slice(-4),
+          pickupId: o.id,
+          userName: o.userName || 'Anonymous',
+          scrapType: o.scrapType || 'Mixed',
+          quantity: o.weight || o.quantity || '0 kg',
+          amount: parseInt((o.collectedAmount || '0').toString().replace(/[^\d]/g, '')) || 0,
+          status: o.status === 'completed' ? 'paid' : 'pending',
+          paymentDate: o.completedAt || null,
+          method: o.paymentMethod || 'TBD'
+       }));
+       setPaymentRecords(records);
 
-  // compute total weight (extract numeric value from quantity strings like "8 kg")
+       // 3. Calculate Revenue
+       const today = new Date().toISOString().split('T')[0];
+       const thisMonth = new Date().toISOString().slice(0, 7);
+       
+       const dailyRev = records.filter(p => (p.paymentDate && p.paymentDate.split(' ')[0] === today) || p.status === 'paid' && p.paymentDate === today); // simplify
+       const monthlyRev = records.filter(p => p.paymentDate && p.paymentDate.includes(thisMonth));
+
+       setRevenueData({
+          daily: { 
+             total: records.filter(r => r.paymentDate?.includes(today)).reduce((a, b) => a + b.amount, 0),
+             transactions: records.filter(r => r.paymentDate?.includes(today)).length
+          },
+          monthly: {
+             total: records.filter(r => r.paymentDate?.includes(thisMonth)).reduce((a, b) => a + b.amount, 0),
+             transactions: records.filter(r => r.paymentDate?.includes(thisMonth)).length
+          }
+       });
+    });
+
+    return () => {
+       unsubscribePricing();
+       unsubscribePayments();
+    };
+  }, []);
+
   const totalWeight = paymentRecords.reduce((sum, p) => {
     const qty = p.quantity ? parseFloat(String(p.quantity).replace(/[^0-9.]/g, '')) : 0;
     return sum + (Number.isFinite(qty) ? qty : 0);
   }, 0);
 
-  // count unique scrap categories from payment records
   const uniqueCategories = new Set(paymentRecords.map(p => p.scrapType)).size;
 
-  const handleUpdatePrice = (id, newPrice) => {
-    setScrapPrices(scrapPrices.map(item =>
-      item.id === id
-        ? { ...item, pricePerKg: parseFloat(newPrice), lastUpdated: new Date().toISOString().split('T')[0] }
-        : item
-    ));
-    setEditingPriceId(null);
+  const handleUpdatePrice = async (id, newPrice) => {
+    try {
+      const priceRef = doc(db, "pricing", id);
+      await updateDoc(priceRef, { 
+        pricePerKg: parseFloat(newPrice), 
+        lastUpdated: new Date().toISOString() 
+      });
+      setEditingPriceId(null);
+    } catch (e) {
+      console.error("Update price error:", e);
+    }
   };
+
 
   return (
     <div className="space-y-6">

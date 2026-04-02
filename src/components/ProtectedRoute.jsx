@@ -1,24 +1,67 @@
-import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { auth, db } from "../firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 
-const ProtectedRoute = ({ children }) => {
+const ProtectedRoute = ({ children, requiredRole = 'user' }) => {
   const navigate = useNavigate();
-  // Check if user is authenticated by looking for token in localStorage
-  const isAuthenticated = localStorage.getItem("token"); 
+  const location = useLocation();
+  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      // Redirect to login if not authenticated
-      navigate("/login", { replace: true });
-    }
-  }, [isAuthenticated, navigate]);
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (!currentUser) {
+        // Correctly redirect based on which portal we are protecting
+        if (location.pathname.startsWith('/admin')) {
+          navigate("/admin/login", { replace: true });
+        } else if (location.pathname.startsWith('/Kabadi')) {
+          navigate("/kabadi/login", { replace: true });
+        } else {
+          navigate("/login", { replace: true });
+        }
+        setLoading(false);
+        return;
+      }
 
-  // If not authenticated, return null while redirecting
-  if (!isAuthenticated) {
-    return null;
+      // If user is logged in, check their role in Firestore
+      try {
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          const userRole = (userData.role || 'user').toLowerCase();
+          const targetRole = requiredRole.toLowerCase();
+
+          // If role doesn't match, redirect to the correct login for that section
+          if (userRole !== targetRole && !userData.isAdmin) {
+             console.warn("Unauthorized role:", userRole, "expected:", targetRole);
+             if (location.pathname.startsWith('/admin')) navigate("/admin/login", { replace: true });
+             else if (location.pathname.startsWith('/Kabadi')) navigate("/kabadi/login", { replace: true });
+             else navigate("/login", { replace: true });
+             return;
+          }
+        }
+      } catch (err) {
+        console.error("Auth check failed", err);
+      }
+
+      setUser(currentUser);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [navigate, requiredRole]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F1F8E9]">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#66BB6A]"></div>
+      </div>
+    );
   }
 
-  return children;
+  return user ? children : null;
 };
 
 export default ProtectedRoute;

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   History,
   Wallet,
@@ -10,6 +10,9 @@ import {
   Award,
   TrendingUp
 } from "lucide-react";
+import { auth, db } from "../../firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { collection, query, where, onSnapshot, orderBy } from "firebase/firestore";
 
 const SERVICE_HISTORY = [
   { id: 101, date: "2023-10-25", type: "Paper & Cardboard", weight: "12 kg", amount: "₹144", status: "Completed", receipt: "REC-001" },
@@ -23,12 +26,62 @@ const SERVICE_HISTORY = [
 
 const Dashboard = () => {
   const [currentPage, setCurrentPage] = useState(1);
+  const [serviceHistory, setServiceHistory] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
   const itemsPerPage = 5;
 
-  const totalPages = Math.ceil(SERVICE_HISTORY.length / itemsPerPage);
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
 
+      // Show mock data ONLY for demo account
+      if (user.email === 'demo@example.com') {
+        setServiceHistory(SERVICE_HISTORY);
+        setIsLoading(false);
+        return;
+      }
+
+      // Real-time Firestore query for other users
+      const ordersRef = collection(db, "orders");
+      const q = query(ordersRef, where("userId", "==", user.uid), orderBy("date", "desc"));
+      
+      const unsubscribeData = onSnapshot(q, (snapshot) => {
+        const orders = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setServiceHistory(orders);
+        setIsLoading(false);
+      }, (err) => {
+        console.warn("Firestore error in dashboard:", err);
+        setIsLoading(false);
+      });
+
+      return () => unsubscribeData();
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  // Calculate stats from serviceHistory
+  const stats = serviceHistory.reduce((acc, item) => {
+    const amount = parseInt(item.amount?.replace(/[^\d]/g, '') || 0);
+    const weight = parseInt(item.weight?.replace(/[^\d]/g, '') || 0);
+    return {
+      totalEarnings: acc.totalEarnings + amount,
+      totalWeight: acc.totalWeight + weight
+    };
+  }, { totalEarnings: 0, totalWeight: 0 });
+
+  const totalPages = Math.max(1, Math.ceil(serviceHistory.length / itemsPerPage));
   const indexOfLast = currentPage * itemsPerPage;
-  const currentItems = SERVICE_HISTORY.slice(indexOfLast - itemsPerPage, indexOfLast);
+  const currentItems = serviceHistory.slice(indexOfLast - itemsPerPage, indexOfLast);
+
+  const goalMax = 500;
+  const goalProgress = Math.min((stats.totalWeight / goalMax) * 100, 100);
 
   const handleView = (id) => {
     console.log("View receipt:", id);
@@ -51,36 +104,36 @@ const Dashboard = () => {
         <div className="relative z-10 grid lg:grid-cols-2 gap-8 items-center">
           <div>
             <span className="bg-white/20 px-3 py-1 rounded-full text-xs font-bold border border-white/10 flex items-center gap-1 mb-4">
-              <Award size={12} /> Gold Member
+              <Award size={12} /> {stats.totalWeight > 100 ? "Gold Member" : "Eco Explorer"}
             </span>
 
             <h1 className="text-3xl lg:text-5xl font-extrabold mb-4">
-              Hello, <span className="text-green-100">Green Hero!</span> 🌱
+              Hello, <span className="text-green-100">{auth.currentUser?.displayName || auth.currentUser?.email?.split('@')[0] || "Green Hero"}!</span> 🌱
             </h1>
 
             <p className="text-green-50 text-lg max-w-lg mb-8">
-              Your recycling efforts are making a real difference. Keep going to unlock the next level!
+              Your recycling efforts {stats.totalWeight > 0 ? "are making a real difference." : "are about to start! Make your first pickup today."}
             </p>
 
             <div className="bg-white/10 rounded-2xl p-5 border border-white/10 max-w-md">
               <div className="flex justify-between mb-2">
                 <span className="text-sm text-green-100">Contribution Goal</span>
                 <span className="text-2xl font-bold">
-                  250 <span className="text-sm text-green-200">/ 500 kg</span>
+                  {stats.totalWeight} <span className="text-sm text-green-200">/ {goalMax} kg</span>
                 </span>
               </div>
 
               <div className="h-3 bg-black/20 rounded-full overflow-hidden mb-2">
                 <div
-                                        className="h-full bg-linear-to-r from-[#AED581] to-[#C5E1A5] rounded-full"
-                  style={{ width: "50%" }}
+                                        className="h-full bg-linear-to-r from-[#AED581] to-[#C5E1A5] rounded-full transition-all duration-1000"
+                  style={{ width: `${goalProgress}%` }}
                 />
               </div>
 
               <div className="flex justify-between text-xs text-green-200">
-                <span>Current Level: Eco Warrior</span>
+                <span>{stats.totalWeight > 200 ? "Current Level: Eco Warrior" : "Current Level: Seedling"}</span>
                 <span className="flex items-center gap-1">
-                  Next: Earth Guardian <ChevronRight size={10} />
+                  Next: {stats.totalWeight > 200 ? "Earth Guardian" : "Eco Warrior"} <ChevronRight size={10} />
                 </span>
               </div>
             </div>
@@ -90,17 +143,17 @@ const Dashboard = () => {
             <div className="bg-white/10 p-6 rounded-2xl border border-white/10">
               <Wallet size={20} className="mb-3" />
               <p className="text-green-200 text-sm">Total Earnings</p>
-              <h3 className="text-3xl font-bold">₹ 14,350</h3>
+              <h3 className="text-3xl font-bold">₹ {stats.totalEarnings.toLocaleString()}</h3>
               <p className="text-xs mt-2 flex items-center gap-1">
-                <TrendingUp size={12} /> +12% this month
+                <TrendingUp size={12} /> Live tracking enabled
               </p>
             </div>
 
             <div className="bg-white/10 p-6 rounded-2xl border border-white/10">
               <Leaf size={20} className="mb-3" />
               <p className="text-green-200 text-sm">Waste Recycled</p>
-              <h3 className="text-3xl font-bold">250 kg</h3>
-              <p className="text-xs mt-2">Saved 12 trees</p>
+              <h3 className="text-3xl font-bold">{stats.totalWeight} kg</h3>
+              <p className="text-xs mt-2">Saved {Math.floor(stats.totalWeight / 20)} trees</p>
             </div>
           </div>
         </div>
