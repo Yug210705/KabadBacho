@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { Calendar, Clock, Upload, Phone, CheckCircle, Sparkles, ArrowRight, Truck, X } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { geocodeAddress } from '../utils/geocoder';
 
 const BookPickup = ({ isOpen, onClose }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -83,14 +84,30 @@ const BookPickup = ({ isOpen, onClose }) => {
 
     setIsSubmitting(true);
     try {
-       await addDoc(collection(db, "orders"), {
+       // Geocode the user's address using hybrid geocoder (Nominatim first, local fallback)
+       const coords = await geocodeAddress(formData.address);
+       const geocodeSuccess = !!(coords?.lat && coords?.lng);
+
+       // Build order data — only include location if geocoding succeeded
+       const orderData = {
           ...formData,
           userId: user.uid,
           userName: formData.name || user.displayName || 'Anonymous',
           status: 'pending',
           requestedAt: serverTimestamp(),
-          scrapType: formData.scrapType.join(', ')
-       });
+          scrapType: formData.scrapType.join(', '),
+          locationGeocoded: geocodeSuccess
+       };
+
+       if (geocodeSuccess) {
+         orderData.location = { lat: coords.lat, lng: coords.lng };
+       } else {
+         // Store null location — background geocoder in Kabadi/Admin will retry
+         orderData.location = null;
+         console.warn(`[BookPickup] Geocoding failed for "${formData.address}", order saved without coordinates.`);
+       }
+
+       await addDoc(collection(db, "orders"), orderData);
        alert("Pickup scheduled successfully! You can track it in your dashboard.");
        onClose();
     } catch (err) {

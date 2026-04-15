@@ -14,6 +14,17 @@ app.use(express.json());
 // Main Engine API
 app.use('/optimize-routes', optimizeRouter);
 
+app.get('/', (req, res) => {
+  res.json({
+    service: 'KabadBecho Optimization Engine',
+    status: 'running',
+    endpoints: {
+      'POST /optimize-routes': 'Run CVRP route optimization',
+      'GET /health': 'Health check',
+    }
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', engine: 'Online' });
 });

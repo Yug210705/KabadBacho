@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { auth, db } from "../../firebase";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, query, where, onSnapshot, orderBy } from "firebase/firestore";
+import { collection, query, where, onSnapshot } from "firebase/firestore";
 
 const SERVICE_HISTORY = [
   { id: 101, date: "2023-10-25", type: "Paper & Cardboard", weight: "12 kg", amount: "₹144", status: "Completed", receipt: "REC-001" },
@@ -37,22 +37,17 @@ const Dashboard = () => {
         return;
       }
 
-      // Show mock data ONLY for demo account
-      if (user.email === 'demo@example.com') {
-        setServiceHistory(SERVICE_HISTORY);
-        setIsLoading(false);
-        return;
-      }
-
       // Real-time Firestore query for other users
       const ordersRef = collection(db, "orders");
-      const q = query(ordersRef, where("userId", "==", user.uid), orderBy("date", "desc"));
+      const q = query(ordersRef, where("userId", "==", user.uid));
       
       const unsubscribeData = onSnapshot(q, (snapshot) => {
         const orders = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         }));
+        // Sort client-side to avoid needing a Firestore composite index
+        orders.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
         setServiceHistory(orders);
         setIsLoading(false);
       }, (err) => {
@@ -67,9 +62,12 @@ const Dashboard = () => {
   }, []);
 
   // Calculate stats from serviceHistory
-  const stats = serviceHistory.reduce((acc, item) => {
-    const amount = parseInt(item.amount?.replace(/[^\d]/g, '') || 0);
-    const weight = parseInt(item.weight?.replace(/[^\d]/g, '') || 0);
+  const stats = (serviceHistory || []).reduce((acc, item) => {
+    if (!item) return acc;
+    const amountStr = item.collectedAmount || item.amount || '0';
+    const weightStr = item.weight || '0';
+    const amount = parseInt(amountStr.toString().replace(/[^\d]/g, '')) || 0;
+    const weight = parseInt(weightStr.toString().replace(/[^\d]/g, '')) || 0;
     return {
       totalEarnings: acc.totalEarnings + amount,
       totalWeight: acc.totalWeight + weight
@@ -181,12 +179,12 @@ const Dashboard = () => {
             </thead>
 
             <tbody>
-              {currentItems.map((item) => (
+              {currentItems.length > 0 ? currentItems.map((item) => (
                 <tr key={item.id} className="border-b">
                   <td className="p-5">{item.date}</td>
-                  <td className="p-5 font-semibold">{item.type}</td>
+                  <td className="p-5 font-semibold">{item.type || item.scrapType}</td>
                   <td className="p-5">{item.weight}</td>
-                  <td className="p-5 font-bold text-[#2E7D32]">{item.amount}</td>
+                  <td className="p-5 font-bold text-[#2E7D32]">{item.amount || item.collectedAmount}</td>
                   <td className="p-5 text-green-700">{item.status}</td>
 
                   <td className="p-5 text-center">
@@ -198,7 +196,14 @@ const Dashboard = () => {
                     </button>
                   </td>
                 </tr>
-              ))}
+              )) : (
+                <tr>
+                  <td colSpan="6" className="p-12 text-center text-gray-500 italic">
+                    <History className="mx-auto mb-2 opacity-20" size={40} />
+                    No pickups found yet. Start by booking your first pickup!
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

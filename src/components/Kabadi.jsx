@@ -27,7 +27,8 @@ import { useNavigate } from 'react-router-dom';
 import LiveMap from './User/LiveMap';
 import { auth, db } from '../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { collection, onSnapshot, query, where, doc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, doc, updateDoc, orderBy } from 'firebase/firestore';
+import { geocodeAddress } from '../utils/geocoder';
 
 const MOCK_PICKUPS = [
   {
@@ -79,8 +80,8 @@ const MOCK_PICKUPS = [
     id: 'KB123456',
     customer: 'Rajesh Kumar',
     phone: '+91 98765 43210',
-    address: '123 Green Street, Indore',
-    lat: 22.7196, lng: 75.8577,
+    address: '123 Green Street, Rajwada, Indore',
+    lat: 22.7180, lng: 75.8550,
     landmark: 'Near MG Road',
     scrapType: 'Metal Scrap',
     emoji: '🔩',
@@ -186,20 +187,49 @@ const KabadBechoDriverDashboard = () => {
   const [pickups, setPickups] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Real GPS location for driver — uses browser geolocation instead of hardcoded coords
+  const [driverGPS, setDriverGPS] = useState(null);
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setDriverGPS({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        console.log(`[GPS] Driver location: ${pos.coords.latitude}, ${pos.coords.longitude}`);
+      },
+      (err) => console.warn('[GPS] Geolocation error:', err.message),
+      { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
+
+  const currentDriverId = auth.currentUser?.uid;
+
+  // Pickups relevant to this driver: assigned to them, or any pending/accepted orders
+  const myPickups = (pickups || []).filter(p => {
+    if (!p) return false;
+    // If assigned to this driver specifically
+    if (p.driverId === currentDriverId) return true;
+    // Show all pending/accepted orders (not assigned to a different specific driver)
+    if (p.status === 'pending' || p.status === 'accepted') return true;
+    // Show completed orders that were assigned to this driver
+    if (p.status === 'completed' && p.driverId === currentDriverId) return true;
+    return false;
+  });
+
   const driverStats = {
     name: auth.currentUser?.displayName || 'Partner',
-    id: auth.currentUser?.uid.slice(0, 6).toUpperCase() || 'DRV-' + Date.now().toString().slice(-4),
-    todayPickups: (pickups || []).length,
-    completedToday: (pickups || []).filter(p => p && p.status === 'completed').length,
-    pendingToday: (pickups || []).filter(p => p && p.status !== 'completed' && p.status !== 'denied').length,
-    totalEarnings: '₹' + (pickups || [])
-      .filter(p => p && p.status === 'completed')
+    id: auth.currentUser?.uid ? auth.currentUser.uid.slice(0, 6).toUpperCase() : ('DRV-' + Date.now().toString().slice(-4)),
+    todayPickups: myPickups.length,
+    completedToday: myPickups.filter(p => p.status === 'completed').length,
+    pendingToday: myPickups.filter(p => p.status !== 'completed' && p.status !== 'denied').length,
+    totalEarnings: '₹' + myPickups
+      .filter(p => p.status === 'completed')
       .reduce((acc, curr) => {
-         const amt = parseInt((curr.collectedAmount || '0').toString().replace(/[^\d]/g, '')) || 0;
+         const amt = parseInt((curr.collectedAmount || curr.amount || '0').toString().replace(/[^\d]/g, '')) || 0;
          return acc + amt;
       }, 0).toLocaleString(),
     rating: 4.8, // Fallback rating
-    totalTrips: (pickups || []).filter(p => p && p.status === 'completed').length + 242, // Adding some base history
+    totalTrips: myPickups.filter(p => p.status === 'completed').length, 
     joinedDate: 'Joined Recently',
     vehicleNo: 'Assignment Pending',
     phone: auth.currentUser?.phoneNumber || 'No phone set',
@@ -213,30 +243,78 @@ const KabadBechoDriverDashboard = () => {
         return;
       }
 
-      // ONLY use mock data for the official demo account
-      if (user.email === 'demo@example.com') {
-        setPickups(MOCK_PICKUPS);
-        setIsLoading(false);
-        return;
-      }
+      // Background geocoder — fixes old orders with wrong/missing coordinates
+      const geocodePending = async (orders) => {
+        for (const order of orders) {
+          // Check if coordinates are missing, null, or suspiciously near old hardcoded fallbacks
+          const lat = order.location?.lat;
+          const lng = order.location?.lng;
+          const hasCoords = (typeof lat === 'number' && typeof lng === 'number' && lat !== 0 && lng !== 0);
+          const isFallback = !hasCoords || (
+            // Old "Mobile Wale" fallback coords
+            (Math.abs(lat - 22.7196) < 0.002 && Math.abs(lng - 75.8577) < 0.002) ||
+            // Old depot fallback coords
+            (Math.abs(lat - 22.7411) < 0.002 && Math.abs(lng - 75.8355) < 0.002) ||
+            // Other old fallback
+            (Math.abs(lat - 22.7750) < 0.002 && Math.abs(lng - 75.8750) < 0.002)
+          );
+
+          if (order.address && (!order.locationGeocoded || isFallback || !hasCoords)) {
+            try {
+              const coords = await geocodeAddress(order.address);
+              if (coords) {
+                await updateDoc(doc(db, "orders", order.id), {
+                  location: { lat: coords.lat, lng: coords.lng },
+                  locationGeocoded: true,
+                  geocodedAt: new Date().toISOString()
+                });
+                console.log(`[FORCE] Geocoded order ${order.id}: ${order.address} → [${coords.lat}, ${coords.lng}]`);
+              }
+            } catch (err) {
+              console.warn("Geocoding failed for", order.id, err);
+            }
+          }
+        }
+      };
 
       // Real-time synchronization for personal accounts
-      const q = query(collection(db, "orders"), orderBy("requestedAt", "desc"));
+      const q = query(collection(db, "orders"));
       const unsubscribeData = onSnapshot(q, (snapshot) => {
-        const orders = snapshot.docs.map(doc => {
-           const data = doc.data();
+        const orders = snapshot.docs.map(docSnap => {
+           const data = docSnap.data();
            return {
-              id: doc.id,
+              id: docSnap.id,
               ...data,
-              customer: data.userName || 'Customer',
+              customer: data.userName || data.name || 'Customer',
               actualWeight: data.weight || 'N/A',
+              estimatedWeight: data.weight || 'N/A',
               emoji: '♻️',
+              // Map location to top-level lat/lng for NavigationModal
+              lat: data.location?.lat || null,
+              lng: data.location?.lng || null,
+              scheduledTime: data.time || data.preferredTime || 'Not set',
               // Add fallback date if missing
               requestedAt: data.requestedAt || new Date().toLocaleString()
            };
         });
         setPickups(orders);
         setIsLoading(false);
+
+        // Auto-geocode orders that haven't been geocoded yet OR have suspicious coords
+        const needsGeocoding = orders.filter(o => {
+          if (!o.address) return false;
+          if (!o.locationGeocoded) return true;
+          // Also re-geocode orders near known bad fallback coordinates
+          const lat = o.location?.lat;
+          const lng = o.location?.lng;
+          if (!lat || !lng) return true;
+          if (Math.abs(lat - 22.7196) < 0.002 && Math.abs(lng - 75.8577) < 0.002) return true;
+          if (Math.abs(lat - 22.7411) < 0.002 && Math.abs(lng - 75.8355) < 0.002) return true;
+          return false;
+        });
+        if (needsGeocoding.length > 0) {
+          geocodePending(needsGeocoding);
+        }
       }, (err) => {
         console.error("Kabadi data error:", err);
         setIsLoading(false);
@@ -248,14 +326,39 @@ const KabadBechoDriverDashboard = () => {
     return () => unsubscribeAuth();
   }, []);
 
-  const filteredPickups = pickups.filter(p => {
+  const filteredPickups = myPickups.filter(p => {
      if (filterStatus === 'pending') return p.status === 'pending' || p.status === 'accepted';
      return p.status === filterStatus;
   });
+
+  const getDistanceStr = (pickup) => {
+    if (pickup.distance) return pickup.distance; // from mock data or optimizer
+    if (!driverGPS || !driverGPS.lat || !driverGPS.lng || !pickup.lat || !pickup.lng) return 'TBA';
+    const p = 0.017453292519943295; // Math.PI / 180
+    const c = Math.cos;
+    const a = 0.5 - c((pickup.lat - driverGPS.lat) * p)/2 + 
+            c(driverGPS.lat * p) * c(pickup.lat * p) * 
+            (1 - c((pickup.lng - driverGPS.lng) * p))/2;
+    const dist = 12742 * Math.asin(Math.sqrt(a)); // 2 * R; R = 6371 km
+    return dist.toFixed(1) + ' km';
+  };
+
+  const getAmountStr = (pickup) => {
+    if (pickup.expectedAmount) return pickup.expectedAmount; // from mock data
+    const w = parseFloat(pickup.estimatedWeight);
+    if (isNaN(w) || w <= 0) return 'TBA (After Weigh-in)';
+    return `₹${w * 15} - ₹${w * 25}`;
+  };
+
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
-    await auth.signOut();
+    try {
+      const { signOut } = await import('firebase/auth');
+      await signOut(auth);
+    } catch(e) {
+      console.error(e);
+    }
     localStorage.removeItem('token');
     navigate('/kabadi/login');
   };
@@ -266,12 +369,6 @@ const KabadBechoDriverDashboard = () => {
   };
 
   const handleCompletePickup = async (pickupId) => {
-    if (auth.currentUser?.email === 'demo@example.com') {
-       setPickups(prev => prev.map(p => p.id === pickupId ? { ...p, status: 'completed', completedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), date: 'Today' } : p));
-       setSelectedPickup(null);
-       return;
-    }
-
     try {
        const orderRef = doc(db, "orders", pickupId);
        await updateDoc(orderRef, {
@@ -419,7 +516,7 @@ const KabadBechoDriverDashboard = () => {
              </div>
              <div className="h-[250px] rounded-xl overflow-hidden shadow-inner">
                 <LiveMap 
-                  routeStops={pickups.filter(p => p.status === 'pending')}
+                  routeStops={myPickups.filter(p => p.status === 'pending' || p.status === 'accepted')}
                   complexRoute={null} // This would be the combined shift polyline from the engine
                 />
              </div>
@@ -431,8 +528,8 @@ const KabadBechoDriverDashboard = () => {
       <section className="px-4 mb-6 overflow-x-auto">
         <div className="flex gap-3 bg-white p-2 rounded-2xl shadow-sm inline-flex min-w-max">
           {[
-            { id: 'pending', label: 'Pending', count: pickups.filter(p => p.status === 'pending').length },
-            { id: 'completed', label: 'Completed', count: pickups.filter(p => p.status === 'completed').length }
+            { id: 'pending', label: 'Pending', count: myPickups.filter(p => p.status === 'pending' || p.status === 'accepted').length },
+            { id: 'completed', label: 'Completed', count: myPickups.filter(p => p.status === 'completed').length }
           ].map((tab) => (
             <button
               key={tab.id}
@@ -503,7 +600,7 @@ const KabadBechoDriverDashboard = () => {
                         </div>
                         <div className="bg-gray-50 p-3 rounded-xl border border-gray-100">
                           <div className="text-xs text-gray-500 mb-1 flex items-center gap-1"><Navigation size={12}/> Dist</div>
-                          <div className="font-semibold text-sm text-[#5D4037]">{pickup.distance}</div>
+                          <div className="font-semibold text-sm text-[#5D4037]">{getDistanceStr(pickup)}</div>
                         </div>
                         <div className="bg-gray-50 p-3 rounded-xl border border-gray-100">
                           <div className="text-xs text-gray-500 mb-1 flex items-center gap-1"><Scale size={12}/> Weight</div>
@@ -511,12 +608,12 @@ const KabadBechoDriverDashboard = () => {
                         </div>
                         <div className="bg-gray-50 p-3 rounded-xl border border-gray-100">
                           <div className="text-xs text-gray-500 mb-1 flex items-center gap-1"><DollarSign size={12}/> Amount</div>
-                          <div className="font-semibold text-sm text-[#66BB6A]">{pickup.status === 'completed' ? pickup.collectedAmount : pickup.expectedAmount}</div>
+                          <div className="font-semibold text-sm text-[#66BB6A]">{pickup.status === 'completed' ? pickup.collectedAmount : getAmountStr(pickup)}</div>
                         </div>
                       </div>
                     </div>
                     <div className="lg:w-48 flex flex-col gap-3 justify-center">
-                      {pickup.status === 'pending' ? (
+                      {pickup.status !== 'completed' ? (
                         <>
                           <button onClick={() => handleStartPickup(pickup)} className="flex items-center justify-center space-x-2 px-4 py-3 bg-gradient-to-r from-[#66BB6A] to-[#4CAF50] text-white font-semibold rounded-xl transition transform hover:-translate-y-1"><Navigation size={18} /><span>Navigate</span></button>
                           <button onClick={() => setSelectedPickup(pickup)} className="flex items-center justify-center space-x-2 px-4 py-3 bg-white border-2 border-[#66BB6A] text-[#66BB6A] font-semibold rounded-xl hover:bg-[#E8F5E9] transition"><CheckCircle size={18} /><span>Complete</span></button>
@@ -596,7 +693,7 @@ const KabadBechoDriverDashboard = () => {
         {activeTab === 'profile' && <ProfileSettings />}
       </main>
       <MobileTabBar />
-      {showNavModal && navTarget && <NavigationModal pickup={navTarget} onClose={() => setShowNavModal(false)} driverLoc={{ lat: 22.7411, lng: 75.8355 }} />}
+      {showNavModal && navTarget && <NavigationModal pickup={navTarget} onClose={() => setShowNavModal(false)} driverLoc={driverGPS || { lat: 22.7244, lng: 75.8839 }} />}
       {selectedPickup && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full p-8 animate-fadeIn">

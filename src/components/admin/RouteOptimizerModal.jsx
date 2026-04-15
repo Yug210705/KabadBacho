@@ -1,11 +1,39 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Truck, X, Route as RouteIcon, Target, Loader2 } from 'lucide-react';
 import LiveMap from '../User/LiveMap';
+import { db } from '../../firebase';
+import { collection, getDocs, query, where, writeBatch, doc } from 'firebase/firestore';
 
 const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
   const [loading, setLoading] = useState(false);
   const [routesData, setRoutesData] = useState(null);
   const [error, setError] = useState('');
+  const [availableDrivers, setAvailableDrivers] = useState([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      const fetchDrivers = async () => {
+        try {
+          const q = query(collection(db, "users"), where("role", "==", "kabadi"));
+          const querySnapshot = await getDocs(q);
+          const drivers = [];
+          querySnapshot.forEach((doc) => {
+            drivers.push({ id: doc.id, name: doc.data().displayName || doc.data().name || 'Driver' });
+          });
+          // Fallback if no drivers found
+          if (drivers.length === 0) {
+             drivers.push({ id: 'V1', name: 'Virtual Driver 1' });
+             drivers.push({ id: 'V2', name: 'Virtual Driver 2' });
+          }
+          setAvailableDrivers(drivers);
+        } catch (err) {
+          console.error("Failed to fetch drivers:", err);
+          setAvailableDrivers([{ id: 'V1', name: 'Virtual Driver 1' }, { id: 'V2', name: 'Virtual Driver 2' }]);
+        }
+      };
+      fetchDrivers();
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -17,18 +45,17 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
     const payload = {
       depot: { id: "INDORE_DEPOT", lat: 22.7411, lng: 75.8355 },
       vehicleCapacity: 800,
-      vehicles: [
-        { id: "V1", status: "available" },
-        { id: "V2", status: "available" }
-      ],
-      requests: requests.filter(r => r.status === 'pending' || r.status === 'accepted').map(r => ({
+      vehicles: availableDrivers.map((d, index) => ({ id: d.id, status: "available" })),
+      requests: requests.filter(r => (r.status === 'pending' || r.status === 'accepted') && r.location?.lat && r.location?.lng).map(r => ({
         id: r.id,
-        lat: r.location?.lat || 22.7196,
-        lng: r.location?.lng || 75.8577,
-        quantity: parseInt(r.quantity) || 50,
-        timeSlot: r.preferredTime?.toLowerCase().includes('am') ? 'morning' : 'evening',
+        lat: r.location.lat,
+        lng: r.location.lng,
+        quantity: parseInt(r.quantity) || parseInt(r.weight) || 50,
+        timeSlot: r.preferredTime?.toLowerCase().includes('am') || r.time?.toLowerCase().includes('morning') ? 'morning' : 'evening',
         scrapType: r.scrapType || 'mixed',
-        priority: r.status === 'accepted' ? 2 : 1
+        priority: r.status === 'accepted' ? 2 : 1,
+        userName: r.userName || r.name || 'Customer',
+        address: r.address || 'N/A'
       }))
     };
 
@@ -49,6 +76,42 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
       setError('Failed to connect to Optimization Engine. Ensure the backend is running on port 4000.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSaveAndAssign = async () => {
+    try {
+      const batch = writeBatch(db);
+      let hasUpdates = false;
+
+      Object.keys(routesData).forEach(timeSlot => {
+        routesData[timeSlot].forEach(route => {
+          route.stops.forEach(stop => {
+            if (stop.type === 'request' && stop.requestIds) {
+              stop.requestIds.forEach(reqId => {
+                const reqRef = doc(db, "orders", reqId);
+                batch.update(reqRef, {
+                  status: 'accepted',
+                  driverId: route.vehicleId,
+                  assignedDate: new Date().toLocaleString()
+                });
+                hasUpdates = true;
+              });
+            }
+          });
+        });
+      });
+
+      if (hasUpdates) {
+        await batch.commit();
+        alert("Successfully committed optimized routes. Drivers will now see their assigned shifts.");
+      } else {
+        alert("No requests were assigned.");
+      }
+      onClose();
+    } catch (error) {
+      console.error("Error assigning routes:", error);
+      alert("Failed to assign routes. Ensure you have permissions and network connectivity.");
     }
   };
 
@@ -118,8 +181,11 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
                                 <div key={sIdx} className="relative">
                                   <div className={`absolute -left-[21px] top-1 w-2 h-2 rounded-full ${stop.type === 'depot' ? 'bg-[#4CAF50] ring-2 ring-[#C8E6C9]' : 'bg-[#FF9800] ring-2 ring-[#FFE0B2]'}`}></div>
                                   <p className="text-sm font-semibold text-gray-800 leading-tight">
-                                    {stop.type === 'depot' ? 'Central Depot' : `Stop: ${stop.id}`}
+                                    {stop.type === 'depot' ? 'Central Depot' : `${stop.userName || stop.id}`}
                                   </p>
+                                  {stop.type !== 'depot' && stop.address && (
+                                    <p className="text-xs text-gray-500 mt-0.5">{stop.address}</p>
+                                  )}
                                   {stop.quantity > 0 && <p className="text-xs text-gray-500 mt-0.5">Collect {stop.quantity} kg</p>}
                                 </div>
                               ))}
@@ -147,11 +213,7 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
                      Reset
                    </button>
                    <button 
-                     onClick={async () => {
-                        // In a real app, you'd iterate through routesData and push to Firebase 'routes' collection
-                        alert("Committing Optimized Routes to Drivers... All drivers will now see their assigned shifts on their mobile dashboards.");
-                        onClose();
-                     }}
+                     onClick={handleSaveAndAssign}
                      className="px-8 py-3 bg-[#2E7D32] text-white font-bold rounded-xl shadow-lg hover:bg-[#1B5E20] transition transform active:scale-95"
                    >
                      Save & Assign to Drivers

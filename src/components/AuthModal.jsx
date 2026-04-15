@@ -5,10 +5,7 @@ import { auth, googleProvider, db } from '../firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
-const DEMO_CREDENTIALS = {
-  email: 'demo@example.com',
-  password: 'password123'
-};
+
 
 // InputField moved outside the component to prevent re-renders losing focus
 const InputField = ({ icon: Icon, type, placeholder, label, value, onChange, error, isPassword, showPass, togglePass }) => (
@@ -59,18 +56,7 @@ const AuthModal = ({ isOpen, onClose, redirectPath }) => {
 
     setIsLoading(true);
     try {
-      let userCredential;
-      try {
-        userCredential = await signInWithEmailAndPassword(auth, email, password);
-      } catch (error) {
-        // If it's the demo account and it doesn't exist, auto-create it
-        if (email === DEMO_CREDENTIALS.email && password === DEMO_CREDENTIALS.password && 
-           (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential')) {
-          userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        } else {
-          throw error;
-        }
-      }
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
 
       // Sync user data to Firestore
       await syncUser(userCredential.user);
@@ -245,35 +231,7 @@ const AuthModal = ({ isOpen, onClose, redirectPath }) => {
                   <span>Continue with Google</span>
                 </button>
 
-                {/* Demo Credentials */}
-                <div className="mt-8 p-4 bg-linear-to-br from-green-50 to-emerald-50 rounded-2xl border border-green-100 shadow-sm">
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="p-1.5 bg-green-500 rounded-lg">
-                      <Info size={16} className="text-white" />
-                    </div>
-                    <h3 className="text-sm font-bold text-green-800">Demo Account Available</h3>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center text-xs bg-white/50 p-2 rounded-lg border border-green-200/50">
-                      <span className="text-gray-500">Email:</span>
-                      <span className="font-mono font-bold text-green-700">{DEMO_CREDENTIALS.email}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-xs bg-white/50 p-2 rounded-lg border border-green-200/50">
-                      <span className="text-gray-500">Pass:</span>
-                      <span className="font-mono font-bold text-green-700">{DEMO_CREDENTIALS.password}</span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEmail(DEMO_CREDENTIALS.email);
-                      setPassword(DEMO_CREDENTIALS.password);
-                    }}
-                    className="w-full mt-3 py-2 text-xs font-bold text-green-600 hover:text-green-700 hover:bg-green-100/50 rounded-lg transition-all border border-green-200"
-                  >
-                    Use Demo Credentials
-                  </button>
-                </div>
+
               </div>
             </>
           )}
@@ -304,36 +262,7 @@ const AuthModal = ({ isOpen, onClose, redirectPath }) => {
                   <span>Sign up with Google</span>
                 </button>
 
-              {/* Demo Credentials for Demo View */}
-              <div className="mt-8 p-4 bg-linear-to-br from-green-50 to-emerald-50 rounded-2xl border border-green-100 shadow-sm">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="p-1.5 bg-green-500 rounded-lg">
-                    <Info size={16} className="text-white" />
-                  </div>
-                  <h3 className="text-sm font-bold text-green-800">Demo Account Available</h3>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center text-xs bg-white/50 p-2 rounded-lg border border-green-200/50">
-                    <span className="text-gray-500">Email:</span>
-                    <span className="font-mono font-bold text-green-700">{DEMO_CREDENTIALS.email}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-xs bg-white/50 p-2 rounded-lg border border-green-200/50">
-                    <span className="text-gray-500">Pass:</span>
-                    <span className="font-mono font-bold text-green-700">{DEMO_CREDENTIALS.password}</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setView('login');
-                    setEmail(DEMO_CREDENTIALS.email);
-                    setPassword(DEMO_CREDENTIALS.password);
-                  }}
-                  className="w-full mt-3 py-2 text-xs font-bold text-green-600 hover:text-green-700 hover:bg-green-100/50 rounded-lg transition-all border border-green-200"
-                >
-                  Switch to Login & Use Demo
-                </button>
-              </div>
+
             </form>
           )}
 

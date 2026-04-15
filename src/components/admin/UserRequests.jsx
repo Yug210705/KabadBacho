@@ -6,74 +6,19 @@ import {
 import RouteOptimizerModal from './RouteOptimizerModal';
 import { auth, db } from '../../firebase';
 import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
+import { geocodeAddress } from '../../utils/geocoder';
 
-const MOCK_REQUESTS = [
-  {
-    id: 'REQ001',
-    userName: 'Rajesh Kumar',
-    phone: '+91 98123 45678',
-    address: 'Rajwada Palace area, Indore',
-    location: { lat: 22.7163, lng: 75.8540 },
-    scrapType: 'Plastic',
-    quantity: 120,
-    preferredDate: '2025-01-05',
-    preferredTime: '10:00 AM - 12:00 PM',
-    status: 'pending',
-    requestedAt: '2025-01-02 09:30 AM',
-  },
-  {
-    id: 'REQ002',
-    userName: 'Priya Sharma',
-    phone: '+91 87654 32109',
-    address: 'Vijay Nagar, Scheme No 54, Indore',
-    location: { lat: 22.7533, lng: 75.8937 },
-    scrapType: 'Metal',
-    quantity: 250,
-    preferredDate: '2025-01-06',
-    preferredTime: '02:00 PM - 04:00 PM',
-    status: 'accepted',
-    requestedAt: '2025-01-01 02:15 PM',
-  },
-  {
-    id: 'REQ003',
-    userName: 'Amit Patel',
-    phone: '+91 76543 21098',
-    address: 'Bhawarkuan Square, Indore',
-    location: { lat: 22.6916, lng: 75.8676 },
-    scrapType: 'Electronics',
-    quantity: 80,
-    preferredDate: '2025-01-04',
-    preferredTime: '11:00 AM - 01:00 PM',
-    status: 'pending',
-    requestedAt: '2024-12-28 11:00 AM',
-  },
-  {
-    id: 'REQ004',
-    userName: 'Sneha Reddy',
-    phone: '+91 65432 10987',
-    address: 'Khajrana Temple Road, Indore',
-    location: { lat: 22.7275, lng: 75.8972 },
-    scrapType: 'Paper',
-    quantity: 300,
-    preferredDate: '2025-01-03',
-    preferredTime: '09:00 AM - 11:00 AM',
-    status: 'pending',
-    requestedAt: '2024-12-30 04:45 PM',
-  },
-  {
-    id: 'REQ005',
-    userName: 'Vikram Singh',
-    phone: '+91 99887 76655',
-    address: 'Palasia, Indore',
-    location: { lat: 22.7244, lng: 75.8839 },
-    scrapType: 'Plastic',
-    quantity: 150,
-    preferredDate: '2025-01-03',
-    preferredTime: '10:00 AM - 12:00 PM',
-    status: 'pending',
-    requestedAt: '2025-01-01 11:00 AM',
-  },
-];
+// Helper to format Firestore Timestamps or date strings for display
+const formatDate = (val) => {
+  if (!val) return '';
+  if (typeof val === 'object' && val.toDate) {
+    return val.toDate().toLocaleString();
+  }
+  if (typeof val === 'object' && val.seconds) {
+    return new Date(val.seconds * 1000).toLocaleString();
+  }
+  return String(val);
+};
 
 const UserRequests = () => {
   const [selectedStatus, setSelectedStatus] = useState('all');
@@ -91,20 +36,63 @@ const UserRequests = () => {
     const user = auth.currentUser;
     if (!user) return;
 
-    if (user.email === 'demo@example.com') {
-      setRequests(MOCK_REQUESTS);
-      setIsLoading(false);
-      return;
-    }
+    // Background geocoder for old orders with wrong/missing coordinates
+    const geocodeOrders = async (orders) => {
+      for (const order of orders) {
+        // Check if coordinates are missing, null, or suspiciously near old hardcoded fallbacks
+        const lat = order.location?.lat;
+        const lng = order.location?.lng;
+        const hasCoords = (typeof lat === 'number' && typeof lng === 'number' && lat !== 0 && lng !== 0);
+        const isFallback = !hasCoords || (
+          // Old "Mobile Wale" fallback coords
+          (Math.abs(lat - 22.7196) < 0.002 && Math.abs(lng - 75.8577) < 0.002) ||
+          // Old depot fallback coords
+          (Math.abs(lat - 22.7411) < 0.002 && Math.abs(lng - 75.8355) < 0.002) ||
+          // Other old fallback
+          (Math.abs(lat - 22.7750) < 0.002 && Math.abs(lng - 75.8750) < 0.002)
+        );
 
-    const q = query(collection(db, "orders"), orderBy("requestedAt", "desc"));
+        if (order.address && (!order.locationGeocoded || isFallback || !hasCoords)) {
+          try {
+            const coords = await geocodeAddress(order.address);
+            if (coords) {
+              await updateDoc(doc(db, "orders", order.id), {
+                location: { lat: coords.lat, lng: coords.lng },
+                locationGeocoded: true,
+                adminGeocodedAt: new Date().toISOString()
+              });
+              console.log(`Admin [FORCE]: Geocoded order ${order.id}: ${order.address} → [${coords.lat}, ${coords.lng}]`);
+            }
+          } catch (err) {
+            console.warn("Geocoding failed for", order.id, err);
+          }
+        }
+      }
+    };
+
+    const q = query(collection(db, "orders"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const orders = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
+      const orders = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
       }));
       setRequests(orders);
       setIsLoading(false);
+
+      // Auto-geocode any orders missing real coordinates OR stuck at bad fallback coords
+      const needsGeo = orders.filter(o => {
+        if (!o.address) return false;
+        if (!o.locationGeocoded) return true;
+        const lat = o.location?.lat;
+        const lng = o.location?.lng;
+        if (!lat || !lng) return true;
+        if (Math.abs(lat - 22.7196) < 0.002 && Math.abs(lng - 75.8577) < 0.002) return true;
+        if (Math.abs(lat - 22.7411) < 0.002 && Math.abs(lng - 75.8355) < 0.002) return true;
+        return false;
+      });
+      if (needsGeo.length > 0) {
+        geocodeOrders(needsGeo);
+      }
     }, (err) => {
       console.error("Firestore error:", err);
       setIsLoading(false);
@@ -114,12 +102,6 @@ const UserRequests = () => {
   }, []);
 
   const handleUpdateStatus = async (requestId, newStatus, extraData = {}) => {
-    // If it's pure mock data, don't try to update Firestore
-    if (auth.currentUser?.email === 'demo@example.com') {
-       setRequests(requests.map(req => req.id === requestId ? { ...req, status: newStatus, ...extraData } : req));
-       return;
-    }
-    
     try {
       const orderRef = doc(db, "orders", requestId);
       await updateDoc(orderRef, { status: newStatus, ...extraData });
@@ -138,11 +120,19 @@ const UserRequests = () => {
     return colors[status] || '';
   };
 
-  const filteredRequests = requests.filter(req => {
+  const filteredRequests = (requests || []).filter(req => {
+    if (!req) return false;
     const matchesStatus = selectedStatus === 'all' || req.status === selectedStatus;
-    const matchesScrapType = selectedScrapType === 'all' || req.scrapType.toLowerCase().includes(selectedScrapType.toLowerCase());
-    const matchesSearch = req.userName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          req.id.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const scrapType = (req.scrapType || '').toString().toLowerCase();
+    const matchesScrapType = selectedScrapType === 'all' || scrapType.includes(selectedScrapType.toLowerCase());
+    
+    const userName = (req.userName || '').toString().toLowerCase();
+    const requestId = (req.id || '').toString().toLowerCase();
+    const search = searchTerm.toLowerCase();
+    
+    const matchesSearch = userName.includes(search) || requestId.includes(search);
+    
     return matchesStatus && matchesScrapType && matchesSearch;
   });
 
@@ -272,7 +262,7 @@ const UserRequests = () => {
                 <tr key={request.id} className="hover:bg-[#FAFAFA] transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-[#5D4037]">{request.id}</div>
-                    <div className="text-xs text-gray-500">{request.requestedAt}</div>
+                    <div className="text-xs text-gray-500">{formatDate(request.requestedAt)}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-start gap-2">
@@ -396,7 +386,7 @@ const UserRequests = () => {
                   <div className="flex-1">
                     <div className={`h-2 rounded-full ${selectedRequest.status === 'pending' ? 'bg-yellow-400' : 'bg-[#66BB6A]'}`} />
                     <p className="text-xs mt-1 font-medium">Requested</p>
-                    <p className="text-xs text-gray-500">{selectedRequest.requestedAt}</p>
+                    <p className="text-xs text-gray-500">{formatDate(selectedRequest.requestedAt)}</p>
                   </div>
                   <div className="flex-1">
                     <div className={`h-2 rounded-full ${['accepted', 'completed'].includes(selectedRequest.status) ? 'bg-[#66BB6A]' : 'bg-gray-200'}`} />

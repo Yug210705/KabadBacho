@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Truck, Calendar, Package, CheckCircle, ArrowLeft, Upload } from 'lucide-react';
 import Footer from '../components/Footer.jsx';
+import { auth, db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 const SchedulePickup = () => {
   const navigate = useNavigate();
@@ -12,13 +14,72 @@ const SchedulePickup = () => {
   // Also check location.state for backward compatibility or if passed that way
   const preSelectedService = serviceNameParam || location.state?.serviceName;
 
+  const [formData, setFormData] = useState({
+    name: '',
+    phone: '',
+    address: '',
+    date: '',
+    time: '',
+    weight: '',
+    notes: ''
+  });
   const [scrapType, setScrapType] = useState('Metal Scrap');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (preSelectedService) {
       setScrapType(preSelectedService);
     }
   }, [preSelectedService]);
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const user = auth.currentUser;
+    if (!user) {
+      alert("Please log in to schedule a pickup.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // Geocode the address properly using Nominatim + local fallback
+      const { geocodeAddress } = await import('../utils/geocoder');
+      const coords = await geocodeAddress(formData.address);
+      const geocodeSuccess = !!(coords?.lat && coords?.lng);
+
+      const orderData = {
+        ...formData,
+        scrapType,
+        userId: user.uid,
+        userName: formData.name || user.displayName || 'Anonymous',
+        status: 'pending',
+        requestedAt: serverTimestamp(),
+        locationGeocoded: geocodeSuccess
+      };
+
+      if (geocodeSuccess) {
+        orderData.location = { lat: coords.lat, lng: coords.lng };
+        console.log(`[SchedulePickup] Geocoded "${formData.address}" → [${coords.lat}, ${coords.lng}]`);
+      } else {
+        orderData.location = null;
+        console.warn(`[SchedulePickup] Geocoding failed for "${formData.address}", saved without coords.`);
+      }
+
+      await addDoc(collection(db, "orders"), orderData);
+      alert("Pickup scheduled successfully!");
+      navigate('/dashboard/pickup');
+    } catch (err) {
+      console.error("Booking failed:", err);
+      alert("Failed to schedule pickup. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
 
   return (
@@ -79,12 +140,16 @@ const SchedulePickup = () => {
               Fill in Your Details
             </h2>
 
-            <form className="space-y-6">
+            <form className="space-y-6" onSubmit={handleSubmit}>
               {/* Name */}
               <div>
                 <label className="block text-[#5D4037] font-semibold mb-2">Full Name</label>
                 <input
                   type="text"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleInputChange}
+                  required
                   placeholder="Enter your full name"
                   className="w-full px-6 py-4 rounded-xl border-2 border-gray-200 focus:border-[#66BB6A] focus:outline-none transition-all"
                 />
@@ -95,6 +160,10 @@ const SchedulePickup = () => {
                 <label className="block text-[#5D4037] font-semibold mb-2">Phone Number</label>
                 <input
                   type="tel"
+                  name="phone"
+                  value={formData.phone}
+                  onChange={handleInputChange}
+                  required
                   placeholder="+91 98765 43210"
                   className="w-full px-6 py-4 rounded-xl border-2 border-gray-200 focus:border-[#66BB6A] focus:outline-none transition-all"
                 />
@@ -105,6 +174,10 @@ const SchedulePickup = () => {
                 <label className="block text-[#5D4037] font-semibold mb-2">Pickup Address</label>
                 <textarea
                   rows="3"
+                  name="address"
+                  value={formData.address}
+                  onChange={handleInputChange}
+                  required
                   placeholder="Enter complete address with landmarks"
                   className="w-full px-6 py-4 rounded-xl border-2 border-gray-200 focus:border-[#66BB6A] focus:outline-none transition-all resize-none"
                 ></textarea>
@@ -116,12 +189,23 @@ const SchedulePickup = () => {
                   <label className="block text-[#5D4037] font-semibold mb-2">Pickup Date</label>
                   <input
                     type="date"
+                    name="date"
+                    value={formData.date}
+                    onChange={handleInputChange}
+                    required
                     className="w-full px-6 py-4 rounded-xl border-2 border-gray-200 focus:border-[#66BB6A] focus:outline-none transition-all"
                   />
                 </div>
                 <div>
                   <label className="block text-[#5D4037] font-semibold mb-2">Preferred Time</label>
-                  <select className="w-full px-6 py-4 rounded-xl border-2 border-gray-200 focus:border-[#66BB6A] focus:outline-none transition-all">
+                  <select 
+                    name="time"
+                    value={formData.time}
+                    onChange={handleInputChange}
+                    required
+                    className="w-full px-6 py-4 rounded-xl border-2 border-gray-200 focus:border-[#66BB6A] focus:outline-none transition-all"
+                  >
+                    <option value="">Select Time Slot</option>
                     <option>Morning (9 AM - 12 PM)</option>
                     <option>Afternoon (12 PM - 3 PM)</option>
                     <option>Evening (3 PM - 6 PM)</option>
@@ -160,6 +244,9 @@ const SchedulePickup = () => {
                 <label className="block text-[#5D4037] font-semibold mb-2">Estimated Weight (kg) <span className="text-gray-400 font-normal text-sm">(Optional)</span></label>
                 <input
                   type="number"
+                  name="weight"
+                  value={formData.weight}
+                  onChange={handleInputChange}
                   placeholder="Approximate weight in kg"
                   className="w-full px-6 py-4 rounded-xl border-2 border-gray-200 focus:border-[#66BB6A] focus:outline-none transition-all"
                 />
@@ -187,6 +274,9 @@ const SchedulePickup = () => {
                 <label className="block text-[#5D4037] font-semibold mb-2">Additional Notes (Optional)</label>
                 <textarea
                   rows="2"
+                  name="notes"
+                  value={formData.notes}
+                  onChange={handleInputChange}
                   placeholder="Any special instructions or requirements"
                   className="w-full px-6 py-4 rounded-xl border-2 border-gray-200 focus:border-[#66BB6A] focus:outline-none transition-all resize-none"
                 ></textarea>
@@ -195,10 +285,11 @@ const SchedulePickup = () => {
               {/* Submit Button */}
               <button
                 type="submit"
-                className="w-full py-5 bg-[#66BB6A] text-white font-bold text-xl rounded-xl hover:bg-[#4CAF50] transition-all duration-300 shadow-xl flex items-center justify-center space-x-3 mt-8"
+                disabled={isSubmitting}
+                className={`w-full py-5 bg-[#66BB6A] text-white font-bold text-xl rounded-xl transition-all duration-300 shadow-xl flex items-center justify-center space-x-3 mt-8 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[#4CAF50]'}`}
               >
                 <Truck size={24} />
-                <span>Confirm Pickup</span>
+                <span>{isSubmitting ? 'Scheduling...' : 'Confirm Pickup'}</span>
               </button>
             </form>
           </div>

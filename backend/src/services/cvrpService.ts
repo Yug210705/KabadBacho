@@ -168,7 +168,9 @@ export class CvrpEngine {
         lat: item.lat,
         lng: item.lng,
         quantity: item.quantity,
-        type: 'request'
+        type: 'request',
+        userName: item.userName,
+        address: item.address
       });
     }
     stops.push({ ...depotStop }); // End at depot

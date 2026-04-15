@@ -63,21 +63,28 @@ const PaymentsPricing = () => {
        }));
        setPaymentRecords(records);
 
-       // 3. Calculate Revenue
        const today = new Date().toISOString().split('T')[0];
        const thisMonth = new Date().toISOString().slice(0, 7);
        
-       const dailyRev = records.filter(p => (p.paymentDate && p.paymentDate.split(' ')[0] === today) || p.status === 'paid' && p.paymentDate === today); // simplify
-       const monthlyRev = records.filter(p => p.paymentDate && p.paymentDate.includes(thisMonth));
+       const dailyRecords = records.filter(p => {
+          if (!p.paymentDate) return false;
+          const pDate = p.paymentDate.toString();
+          return pDate.includes(today) || (p.status === 'paid' && pDate === today);
+       });
+
+       const monthlyRecords = records.filter(p => {
+          if (!p.paymentDate) return false;
+          return p.paymentDate.toString().includes(thisMonth);
+       });
 
        setRevenueData({
           daily: { 
-             total: records.filter(r => r.paymentDate?.includes(today)).reduce((a, b) => a + b.amount, 0),
-             transactions: records.filter(r => r.paymentDate?.includes(today)).length
+             total: dailyRecords.reduce((a, b) => a + (b.amount || 0), 0),
+             transactions: dailyRecords.length
           },
           monthly: {
-             total: records.filter(r => r.paymentDate?.includes(thisMonth)).reduce((a, b) => a + b.amount, 0),
-             transactions: records.filter(r => r.paymentDate?.includes(thisMonth)).length
+             total: monthlyRecords.reduce((a, b) => a + (b.amount || 0), 0),
+             transactions: monthlyRecords.length
           }
        });
     });

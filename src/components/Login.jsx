@@ -2,13 +2,10 @@ import React, { useState } from 'react';
 import { Mail, Lock, Eye, EyeOff, ArrowRight, Recycle, Leaf, Info, Loader2, Chrome, Phone, Shield, Truck, UserCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { auth, googleProvider, db } from '../firebase';
-import { signInWithEmailAndPassword, signInWithPopup, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithPopup, createUserWithEmailAndPassword, onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 
-const DEMO_CREDENTIALS = {
-  email: 'demo@example.com',
-  password: 'password123'
-};
+
 
 const KabadBechoLogin = ({ defaultRole = 'user' }) => {
   const navigate = useNavigate();
@@ -21,6 +18,36 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState({});
   const [focusedInput, setFocusedInput] = useState(null);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
+  // Auto-redirect if user is already logged in
+  React.useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', user.uid));
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            const userRole = (userData.role || 'user').toLowerCase();
+            if (userRole === 'admin' || userData.isAdmin) {
+              navigate('/admin', { replace: true });
+              return;
+            } else if (userRole === 'kabadi' || userData.isPartner) {
+              navigate('/Kabadi', { replace: true });
+              return;
+            }
+          }
+        } catch (err) {
+          console.warn('Auth check on login page failed:', err);
+        }
+        // Fallback: If logged in but no doc or fetch failed, just send to dashboard
+        navigate('/dashboard', { replace: true });
+        return;
+      }
+      setCheckingAuth(false);
+    });
+    return () => unsubscribe();
+  }, [navigate]);
 
   const validateEmail = (email) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -42,17 +69,7 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
       if (view === 'signup') {
         userCredential = await createUserWithEmailAndPassword(auth, email, password);
       } else {
-        try {
           userCredential = await signInWithEmailAndPassword(auth, email, password);
-        } catch (error) {
-          // If it's the demo account and it doesn't exist, auto-create it
-          if (email === DEMO_CREDENTIALS.email && password === DEMO_CREDENTIALS.password && 
-             (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential')) {
-            userCredential = await createUserWithEmailAndPassword(auth, email, password);
-          } else {
-            throw error;
-          }
-        }
       }
       await syncUser(userCredential.user);
       
@@ -88,6 +105,12 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
         role: role || 'user',
         isAdmin: role === 'admin',
         isPartner: role === 'kabadi',
+        status: 'active',
+        pickupsCount: 0,
+        totalSpent: 0,
+        totalEarnings: 0,
+        phone: user.phoneNumber || '',
+        photoURL: user.photoURL || '',
         createdAt: serverTimestamp()
       });
     } else {
@@ -158,6 +181,14 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
     }
   };
 
+
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-[#F1F8E9] flex items-center justify-center">
+        <Loader2 className="animate-spin text-[#66BB6A]" size={48} />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F1F8E9] flex items-center justify-center p-4 pt-28 relative overflow-hidden">
@@ -392,36 +423,7 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
             )}
           </p>
 
-          {/* Demo Credentials Card */}
-          <div className="mt-8 p-4 bg-linear-to-br from-gray-50 to-white rounded-2xl border border-gray-100 shadow-sm">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="p-1.5 rounded-lg" style={{ backgroundColor: config.primary }}>
-                  <Info size={16} className="text-white" />
-                </div>
-                <h3 className="text-sm font-bold text-gray-800">Demo Account Available</h3>
-              </div>
-              <div className="space-y-2 mb-4">
-                <div className="flex justify-between items-center text-xs bg-white/50 p-2 rounded-lg border border-gray-100">
-                  <span className="text-gray-500">Email:</span>
-                  <span className="font-mono font-bold text-gray-700">{DEMO_CREDENTIALS.email}</span>
-                </div>
-                <div className="flex justify-between items-center text-xs bg-white/50 p-2 rounded-lg border border-gray-100">
-                  <span className="text-gray-500">Pass:</span>
-                  <span className="font-mono font-bold text-gray-700">{DEMO_CREDENTIALS.password}</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setEmail(DEMO_CREDENTIALS.email);
-                  setPassword(DEMO_CREDENTIALS.password);
-                }}
-                className="w-full py-2 text-xs font-bold transition-all border rounded-lg"
-                style={{ color: config.primary, borderColor: config.primary + '30', backgroundColor: config.primary + '08' }}
-              >
-                Use Demo Credentials
-              </button>
-          </div>
+
         </div>
       </div>
 

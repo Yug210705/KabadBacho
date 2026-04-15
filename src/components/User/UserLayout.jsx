@@ -18,8 +18,14 @@ const UserLayout = () => {
 
   const isActive = (path) => location.pathname === path;
 
-  const handleLogout = () => {
-    // Clear authentication token from localStorage
+  const handleLogout = async () => {
+    try {
+      const { signOut } = await import('firebase/auth');
+      const { auth } = await import('../../firebase');
+      await signOut(auth);
+    } catch(e) {
+      console.error(e);
+    }
     localStorage.removeItem('token');
     navigate("/login");
   };

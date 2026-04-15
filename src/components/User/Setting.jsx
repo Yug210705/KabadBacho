@@ -57,20 +57,6 @@ const KabadBechoSettings = () => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return;
 
-      if (user.email === 'demo@example.com') {
-        setProfileData({
-          name: 'Rajesh Kumar',
-          email: 'rajesh.kumar@example.com',
-          phone: '9876543210',
-          address: '123 Green Street, Eco City',
-          city: 'Mumbai',
-          state: 'Maharashtra',
-          pincode: '400001',
-          alternatePhone: '9876543211'
-        });
-        return;
-      }
-
       try {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         if (userDoc.exists()) {
@@ -111,11 +97,7 @@ const KabadBechoSettings = () => {
 
   const handleSave = async () => {
     const user = auth.currentUser;
-    if (!user || user.email === 'demo@example.com') {
-       setSaveSuccess(true);
-       setTimeout(() => setSaveSuccess(false), 3000);
-       return;
-    }
+    if (!user) return;
 
     setIsUpdating(true);
     try {

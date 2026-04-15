@@ -22,30 +22,6 @@ const UserManagement = () => {
         return;
       }
 
-      if (user.email === 'demo@example.com') {
-        setUsers([
-          {
-            id: 'USR001',
-            name: 'Rajesh Kumar',
-            phone: '+91 98765 43210',
-            email: 'rajesh@email.com',
-            address: '123, MG Road, Bangalore',
-            totalPickups: 12,
-            activePickups: 2,
-            status: 'active',
-            joinedDate: '2024-08-15',
-            lastActive: '2025-01-02',
-            frequentCancellations: false,
-            pickupHistory: [
-              { id: 'REQ001', date: '2025-01-02', scrapType: 'Plastic', quantity: '15 kg', status: 'pending' },
-              { id: 'REQ015', date: '2024-12-20', scrapType: 'Paper', quantity: '20 kg', status: 'completed' },
-            ]
-          }
-        ]);
-        setIsLoading(false);
-        return;
-      }
-
       const q = query(collection(db, "users"));
       const unsubscribeData = onSnapshot(q, (snapshot) => {
         const usersList = snapshot.docs.map(doc => ({
@@ -69,10 +45,16 @@ const UserManagement = () => {
     return () => unsubscribeAuth();
   }, []);
 
-  const filteredUsers = users.filter(user => {
-    const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          user.phone.includes(searchTerm) ||
-                          user.id.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredUsers = (users || []).filter(user => {
+    if (!user) return false;
+    const name = (user.name || '').toString().toLowerCase();
+    const phone = (user.phone || '').toString();
+    const id = (user.id || '').toString().toLowerCase();
+    const search = searchTerm.toLowerCase();
+
+    const matchesSearch = name.includes(search) ||
+                          phone.includes(searchTerm) ||
+                          id.includes(search);
     const matchesStatus = statusFilter === 'all' || user.status === statusFilter;
     return matchesSearch && matchesStatus;
   });

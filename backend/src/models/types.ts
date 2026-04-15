@@ -20,6 +20,8 @@ export interface PickupRequest {
   timeSlot: string; // 'morning' | 'evening'
   scrapType: string; // e.g., 'metal', 'plastic', 'e-waste'
   priority?: number; // Higher is merged earlier
+  userName?: string;
+  address?: string;
 }
 
 export interface OptimizationRequest {
@@ -36,6 +38,8 @@ export interface RouteStop {
   quantity: number;
   type?: 'depot' | 'request';
   requestIds?: string[]; // In case we merged overlapping requests
+  userName?: string;
+  address?: string;
 }
 
 export interface RouteDetail {

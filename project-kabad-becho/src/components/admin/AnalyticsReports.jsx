@@ -28,7 +28,6 @@ const AnalyticsReports = () => {
   const [topUsers, setTopUsers] = useState([]);
 
   useEffect(() => {
-    const isDemo = auth.currentUser?.email === 'demo@example.com';
     
     // Listen to Orders for most stats
     const qOrders = query(collection(db, "orders"));
@@ -76,8 +75,16 @@ const AnalyticsReports = () => {
        }
        
        orders.forEach(o => {
-          const orderDate = o.requestedAt?.split(' ')[0] || o.date;
-          if (daily[orderDate] !== undefined) {
+          let orderDate = o.date;
+          if (o.requestedAt) {
+            // Handle Firestore Timestamp objects
+            if (typeof o.requestedAt === 'object' && o.requestedAt.toDate) {
+              orderDate = o.requestedAt.toDate().toISOString().split('T')[0];
+            } else if (typeof o.requestedAt === 'string') {
+              orderDate = o.requestedAt.split(' ')[0];
+            }
+          }
+          if (orderDate && daily[orderDate] !== undefined) {
             daily[orderDate]++;
           }
        });
@@ -267,15 +274,15 @@ const AnalyticsReports = () => {
           </div>
           
           <div className="space-y-3">
-            {pickupsPerDay.map((day, index) => {
-              const barWidth = (day.pickups / maxPickups) * 100;
+            {pickupsPerDay.length > 0 ? pickupsPerDay.map((day, index) => {
+              const barWidth = maxPickups > 0 ? (day.pickups / maxPickups) * 100 : 0;
               return (
                 <div key={index}>
                   <div className="flex items-center justify-between text-sm mb-1">
                     <span className="text-gray-600 font-medium">
-                      {new Date(day.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                      {day.date ? new Date(day.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : 'N/A'}
                     </span>
-                    <span className="font-bold text-[#66BB6A]">{day.pickups}</span>
+                    <span className="font-bold text-[#66BB6A]">{day.pickups || 0}</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
                     <div 
@@ -285,7 +292,12 @@ const AnalyticsReports = () => {
                   </div>
                 </div>
               );
-            })}
+            }) : (
+              <div className="text-center py-10 text-gray-400">
+                <BarChart3 className="mx-auto mb-2 opacity-20" size={40} />
+                <p>No activity data available for this period</p>
+              </div>
+            )}
           </div>
 
           <div className="mt-6 pt-4 border-t border-gray-200 flex items-center justify-between text-sm">
@@ -307,7 +319,7 @@ const AnalyticsReports = () => {
           </div>
 
           <div className="space-y-3">
-            {scrapCategoryDistribution.map((category, index) => {
+            {scrapCategoryDistribution.length > 0 ? scrapCategoryDistribution.map((category, index) => {
               const colors = ['bg-[#66BB6A]', 'bg-[#81C784]', 'bg-[#5D4037]', 'bg-[#A1887F]', 'bg-[#4CAF50]'];
               const textColors = ['text-[#66BB6A]', 'text-[#81C784]', 'text-[#5D4037]', 'text-[#A1887F]', 'text-[#4CAF50]'];
               
@@ -315,26 +327,31 @@ const AnalyticsReports = () => {
                 <div key={index}>
                   <div className="flex items-center justify-between text-sm mb-1">
                     <div className="flex items-center gap-2">
-                      <div className={`w-3 h-3 rounded-full ${colors[index]}`} />
+                      <div className={`w-3 h-3 rounded-full ${colors[index % colors.length]}`} />
                       <span className="text-gray-700 font-medium">{category.category}</span>
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-gray-600">{category.count} pickups</span>
-                      <span className={`font-bold ${textColors[index]}`}>{category.percentage}%</span>
+                      <span className={`font-bold ${textColors[index % textColors.length]}`}>{category.percentage}%</span>
                     </div>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
                     <div 
-                      className={`${colors[index]} h-full rounded-full transition-all duration-500`}
+                      className={`${colors[index % colors.length]} h-full rounded-full transition-all duration-500`}
                       style={{ width: `${category.percentage}%` }}
                     />
                   </div>
                   <div className="text-xs text-gray-500 mt-1 ml-5">
-                    Revenue: ₹{category.revenue.toLocaleString()}
+                    Revenue: ₹{(category.revenue || 0).toLocaleString()}
                   </div>
                 </div>
               );
-            })}
+            }) : (
+              <div className="text-center py-10 text-gray-400">
+                <PieChart className="mx-auto mb-2 opacity-20" size={40} />
+                <p>No category data available</p>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -106,13 +106,6 @@ const ComplaintsSupport = () => {
   ];
 
   useEffect(() => {
-    const isDemo = auth.currentUser?.email === 'demo@example.com';
-    if (isDemo) {
-      setComplaints(MOCK_COMPLAINTS);
-      setLoading(false);
-      return;
-    }
-
     const q = query(collection(db, "complaints"), orderBy("createdAt", "desc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
        const list = snapshot.docs.map(doc => ({
@@ -129,10 +122,6 @@ const ComplaintsSupport = () => {
   }, []);
 
   const handleUpdateStatus = async (complaintId, newStatus) => {
-    if (auth.currentUser?.email === 'demo@example.com') {
-       setComplaints(complaints.map(c => c.id === complaintId ? { ...c, status: newStatus } : c));
-       return;
-    }
     try {
       const docRef = doc(db, "complaints", complaintId);
       await updateDoc(docRef, { 
@@ -145,10 +134,6 @@ const ComplaintsSupport = () => {
   };
 
   const handleAddNote = async (complaintId, note) => {
-    if (auth.currentUser?.email === 'demo@example.com') {
-        setComplaints(complaints.map(c => c.id === complaintId ? { ...c, adminNotes: [...(c.adminNotes || []), { note, timestamp: new Date().toLocaleString(), admin: 'Admin' }] } : c));
-        return;
-    }
     try {
       const complaint = complaints.find(c => c.id === complaintId);
       const newNotes = [...(complaint.adminNotes || []), { 
@@ -184,10 +169,16 @@ const ComplaintsSupport = () => {
     return colors[priority] || '';
   };
 
-  const filteredComplaints = complaints.filter(complaint => {
-    const matchesSearch = complaint.subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          complaint.userName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          complaint.id.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredComplaints = (complaints || []).filter(complaint => {
+    if (!complaint) return false;
+    const subject = (complaint.subject || '').toString().toLowerCase();
+    const userName = (complaint.userName || '').toString().toLowerCase();
+    const id = (complaint.id || '').toString().toLowerCase();
+    const search = searchTerm.toLowerCase();
+
+    const matchesSearch = subject.includes(search) ||
+                          userName.includes(search) ||
+                          id.includes(search);
     const matchesStatus = statusFilter === 'all' || complaint.status === statusFilter;
     const matchesPriority = priorityFilter === 'all' || complaint.priority === priorityFilter;
     return matchesSearch && matchesStatus && matchesPriority;

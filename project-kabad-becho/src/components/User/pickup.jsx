@@ -140,12 +140,6 @@ const KabadBechoTrackPickup = () => {
         return;
       }
 
-      if (user.email === 'demo@example.com') {
-        setPickups(MOCK_PICKUPS);
-        setIsLoading(false);
-        return;
-      }
-
       const q = query(collection(db, "orders"), where("userId", "==", user.uid));
       const unsubscribeData = onSnapshot(q, (snapshot) => {
         const orders = snapshot.docs.map(doc => ({
@@ -193,9 +187,13 @@ const KabadBechoTrackPickup = () => {
     }
   };
 
-  const filteredPickups = pickups.filter(pickup => {
-    const matchesSearch = pickup.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         pickup.scrapType.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredPickups = (pickups || []).filter(pickup => {
+    if (!pickup) return false;
+    const id = (pickup.id || '').toString().toLowerCase();
+    const type = (pickup.scrapType || '').toString().toLowerCase();
+    const search = searchQuery.toLowerCase();
+    
+    const matchesSearch = id.includes(search) || type.includes(search);
     const matchesFilter = filterStatus === 'all' || pickup.status === filterStatus;
     return matchesSearch && matchesFilter;
   });
@@ -346,15 +344,15 @@ const KabadBechoTrackPickup = () => {
                       </div>
 
                       {/* Driver Info */}
-                      {pickup.status !== 'scheduled' && (
+                      {pickup.status !== 'scheduled' && pickup.driverName && (
                         <div className="flex items-center space-x-3 p-4 bg-linear-to-r from-[#E8F5E9] to-white rounded-xl border-l-4 border-[#66BB6A]">
                           <div className="w-12 h-12 bg-linear-to-br from-[#66BB6A] to-[#4CAF50] rounded-full flex items-center justify-center text-white font-bold text-lg">
-                            {pickup.driverName.charAt(0)}
+                            {(pickup.driverName || '?').charAt(0)}
                           </div>
                           <div className="flex-1">
                             <div className="text-sm text-gray-600">Driver</div>
                             <div className="font-bold text-[#5D4037]">{pickup.driverName}</div>
-                            {pickup.driverPhone !== '-' && (
+                            {pickup.driverPhone && pickup.driverPhone !== '-' && (
                               <div className="text-sm text-gray-600">{pickup.driverPhone}</div>
                             )}
                           </div>

@@ -27,7 +27,8 @@ import { useNavigate } from 'react-router-dom';
 import LiveMap from './User/LiveMap';
 import { auth, db } from '../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { collection, onSnapshot, query, where, doc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, doc, updateDoc, orderBy } from 'firebase/firestore';
+import { geocodeAddress } from '../utils/geocoder';
 
 const MOCK_PICKUPS = [
   {
@@ -186,20 +187,34 @@ const KabadBechoDriverDashboard = () => {
   const [pickups, setPickups] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  const currentDriverId = auth.currentUser?.uid;
+
+  // Pickups relevant to this driver: assigned to them, or any pending/accepted orders
+  const myPickups = (pickups || []).filter(p => {
+    if (!p) return false;
+    // If assigned to this driver specifically
+    if (p.driverId === currentDriverId) return true;
+    // Show all pending/accepted orders (not assigned to a different specific driver)
+    if (p.status === 'pending' || p.status === 'accepted') return true;
+    // Show completed orders that were assigned to this driver
+    if (p.status === 'completed' && p.driverId === currentDriverId) return true;
+    return false;
+  });
+
   const driverStats = {
     name: auth.currentUser?.displayName || 'Partner',
-    id: auth.currentUser?.uid.slice(0, 6).toUpperCase() || 'DRV-' + Date.now().toString().slice(-4),
-    todayPickups: (pickups || []).length,
-    completedToday: (pickups || []).filter(p => p && p.status === 'completed').length,
-    pendingToday: (pickups || []).filter(p => p && p.status !== 'completed' && p.status !== 'denied').length,
-    totalEarnings: '₹' + (pickups || [])
-      .filter(p => p && p.status === 'completed')
+    id: auth.currentUser?.uid ? auth.currentUser.uid.slice(0, 6).toUpperCase() : ('DRV-' + Date.now().toString().slice(-4)),
+    todayPickups: myPickups.length,
+    completedToday: myPickups.filter(p => p.status === 'completed').length,
+    pendingToday: myPickups.filter(p => p.status !== 'completed' && p.status !== 'denied').length,
+    totalEarnings: '₹' + myPickups
+      .filter(p => p.status === 'completed')
       .reduce((acc, curr) => {
-         const amt = parseInt((curr.collectedAmount || '0').toString().replace(/[^\d]/g, '')) || 0;
+         const amt = parseInt((curr.collectedAmount || curr.amount || '0').toString().replace(/[^\d]/g, '')) || 0;
          return acc + amt;
       }, 0).toLocaleString(),
     rating: 4.8, // Fallback rating
-    totalTrips: (pickups || []).filter(p => p && p.status === 'completed').length + 242, // Adding some base history
+    totalTrips: myPickups.filter(p => p.status === 'completed').length, 
     joinedDate: 'Joined Recently',
     vehicleNo: 'Assignment Pending',
     phone: auth.currentUser?.phoneNumber || 'No phone set',
@@ -213,30 +228,65 @@ const KabadBechoDriverDashboard = () => {
         return;
       }
 
-      // ONLY use mock data for the official demo account
-      if (user.email === 'demo@example.com') {
-        setPickups(MOCK_PICKUPS);
-        setIsLoading(false);
-        return;
-      }
+      // Background geocoder — fixes old orders with random/missing coordinates
+      const geocodePending = async (orders) => {
+        for (const order of orders) {
+          // Check if coordinates look suspicious (near old fallback center)
+          const lat = order.location?.lat;
+          const lng = order.location?.lng;
+          const isFallback = (
+            !lat || !lng || 
+            (Math.abs(lat - 22.7411) < 0.001 && Math.abs(lng - 75.8355) < 0.001) ||
+            (Math.abs(lat - 22.7196) < 0.001 && Math.abs(lng - 75.8577) < 0.001) ||
+            (Math.abs(lat - 22.7856) < 0.001 && Math.abs(lng - 75.8488) < 0.001)
+          );
+
+          if (order.address && (!order.locationGeocoded || isFallback)) {
+            try {
+              const coords = await geocodeAddress(order.address);
+              if (coords) {
+                await updateDoc(doc(db, "orders", order.id), {
+                  location: { lat: coords.lat, lng: coords.lng },
+                  locationGeocoded: true,
+                  geocodedAt: new Date().toISOString()
+                });
+                console.log(`[FORCE] Geocoded order ${order.id}: ${order.address} → [${coords.lat}, ${coords.lng}]`);
+              }
+            } catch (err) {
+              console.warn("Geocoding failed for", order.id, err);
+            }
+          }
+        }
+      };
 
       // Real-time synchronization for personal accounts
-      const q = query(collection(db, "orders"), orderBy("requestedAt", "desc"));
+      const q = query(collection(db, "orders"));
       const unsubscribeData = onSnapshot(q, (snapshot) => {
-        const orders = snapshot.docs.map(doc => {
-           const data = doc.data();
+        const orders = snapshot.docs.map(docSnap => {
+           const data = docSnap.data();
            return {
-              id: doc.id,
+              id: docSnap.id,
               ...data,
-              customer: data.userName || 'Customer',
+              customer: data.userName || data.name || 'Customer',
               actualWeight: data.weight || 'N/A',
+              estimatedWeight: data.weight || 'N/A',
               emoji: '♻️',
+              // Map location to top-level lat/lng for NavigationModal
+              lat: data.location?.lat || 22.7196,
+              lng: data.location?.lng || 75.8577,
+              scheduledTime: data.time || data.preferredTime || 'Not set',
               // Add fallback date if missing
               requestedAt: data.requestedAt || new Date().toLocaleString()
            };
         });
         setPickups(orders);
         setIsLoading(false);
+
+        // Auto-geocode orders that haven't been geocoded yet (runs in background)
+        const needsGeocoding = orders.filter(o => o.address && !o.locationGeocoded);
+        if (needsGeocoding.length > 0) {
+          geocodePending(needsGeocoding);
+        }
       }, (err) => {
         console.error("Kabadi data error:", err);
         setIsLoading(false);
@@ -248,7 +298,7 @@ const KabadBechoDriverDashboard = () => {
     return () => unsubscribeAuth();
   }, []);
 
-  const filteredPickups = pickups.filter(p => {
+  const filteredPickups = myPickups.filter(p => {
      if (filterStatus === 'pending') return p.status === 'pending' || p.status === 'accepted';
      return p.status === filterStatus;
   });
@@ -266,12 +316,6 @@ const KabadBechoDriverDashboard = () => {
   };
 
   const handleCompletePickup = async (pickupId) => {
-    if (auth.currentUser?.email === 'demo@example.com') {
-       setPickups(prev => prev.map(p => p.id === pickupId ? { ...p, status: 'completed', completedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), date: 'Today' } : p));
-       setSelectedPickup(null);
-       return;
-    }
-
     try {
        const orderRef = doc(db, "orders", pickupId);
        await updateDoc(orderRef, {
@@ -419,7 +463,7 @@ const KabadBechoDriverDashboard = () => {
              </div>
              <div className="h-[250px] rounded-xl overflow-hidden shadow-inner">
                 <LiveMap 
-                  routeStops={pickups.filter(p => p.status === 'pending')}
+                  routeStops={myPickups.filter(p => p.status === 'pending' || p.status === 'accepted')}
                   complexRoute={null} // This would be the combined shift polyline from the engine
                 />
              </div>
@@ -431,8 +475,8 @@ const KabadBechoDriverDashboard = () => {
       <section className="px-4 mb-6 overflow-x-auto">
         <div className="flex gap-3 bg-white p-2 rounded-2xl shadow-sm inline-flex min-w-max">
           {[
-            { id: 'pending', label: 'Pending', count: pickups.filter(p => p.status === 'pending').length },
-            { id: 'completed', label: 'Completed', count: pickups.filter(p => p.status === 'completed').length }
+            { id: 'pending', label: 'Pending', count: myPickups.filter(p => p.status === 'pending' || p.status === 'accepted').length },
+            { id: 'completed', label: 'Completed', count: myPickups.filter(p => p.status === 'completed').length }
           ].map((tab) => (
             <button
               key={tab.id}
@@ -516,7 +560,7 @@ const KabadBechoDriverDashboard = () => {
                       </div>
                     </div>
                     <div className="lg:w-48 flex flex-col gap-3 justify-center">
-                      {pickup.status === 'pending' ? (
+                      {pickup.status !== 'completed' ? (
                         <>
                           <button onClick={() => handleStartPickup(pickup)} className="flex items-center justify-center space-x-2 px-4 py-3 bg-gradient-to-r from-[#66BB6A] to-[#4CAF50] text-white font-semibold rounded-xl transition transform hover:-translate-y-1"><Navigation size={18} /><span>Navigate</span></button>
                           <button onClick={() => setSelectedPickup(pickup)} className="flex items-center justify-center space-x-2 px-4 py-3 bg-white border-2 border-[#66BB6A] text-[#66BB6A] font-semibold rounded-xl hover:bg-[#E8F5E9] transition"><CheckCircle size={18} /><span>Complete</span></button>

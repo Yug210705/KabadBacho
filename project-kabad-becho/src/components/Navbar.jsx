@@ -3,6 +3,7 @@ import { Menu, X, User, LogOut, ChevronDown } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import AuthModal from './AuthModal';
 import BookPickup from '../pages/BookPickup';
+import { auth } from '../firebase';
 
 
 const Navbar = () => {
@@ -16,24 +17,16 @@ const Navbar = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  const [currentUser, setCurrentUser] = useState(null);
+
   // Check authentication status
   useEffect(() => {
-    const checkAuth = () => {
-      const token = localStorage.getItem('token');
-      setIsAuthenticated(!!token);
-    };
-    
-    checkAuth();
-    // Listen for storage changes (in case user logs in/out in another tab)
-    window.addEventListener('storage', checkAuth);
-    // Also check periodically or on route changes
-    const interval = setInterval(checkAuth, 1000);
-    
-    return () => {
-      window.removeEventListener('storage', checkAuth);
-      clearInterval(interval);
-    };
-  }, [location]);
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      setIsAuthenticated(!!user);
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -44,7 +37,13 @@ const Navbar = () => {
   }, []);
 
   // Logout handler
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      const { signOut } = await import('firebase/auth');
+      await signOut(auth);
+    } catch (e) {
+      console.error('Sign out error:', e);
+    }
     localStorage.removeItem('token');
     setIsAuthenticated(false);
     setShowProfileMenu(false);
@@ -161,8 +160,8 @@ const Navbar = () => {
                               <User size={20} />
                             </div>
                             <div>
-                              <p className="font-bold text-[#2E7D32] text-sm">Logged In</p>
-                              <p className="text-xs text-gray-600">demo@example.com</p>
+                              <p className="font-bold text-[#2E7D32] text-sm">{currentUser?.displayName || 'User'}</p>
+                              <p className="text-xs text-gray-600">{currentUser?.email || 'N/A'}</p>
                             </div>
                           </div>
                         </div>
@@ -246,8 +245,8 @@ const Navbar = () => {
                           <User size={20} />
                         </div>
                         <div>
-                          <p className="font-bold text-[#2E7D32] text-sm">Logged In</p>
-                          <p className="text-xs text-gray-600">demo@example.com</p>
+                          <p className="font-bold text-[#2E7D32] text-sm">{currentUser?.displayName || 'User'}</p>
+                          <p className="text-xs text-gray-600">{currentUser?.email || 'N/A'}</p>
                         </div>
                       </div>
                     </div>

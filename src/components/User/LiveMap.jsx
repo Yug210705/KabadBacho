@@ -36,7 +36,7 @@ const MapBounds = ({ locations }) => {
 const LiveMap = ({ driverLocation, pickupLocation, deliveryLocation, routeStops = [], complexRoute = null }) => {
   console.log("LiveMap props:", { driverLocation, pickupLocation, deliveryLocation, routeStops, complexRoute });
 
-  const defaultCenter = { lat: 22.7196, lng: 75.8577 }; // Indore Default
+  const defaultCenter = { lat: 22.7244, lng: 75.8839 }; // Indore city center (Palasia)
   const centerCandidate = routeStops.length > 0 ? routeStops[0] : (pickupLocation && pickupLocation.lat ? pickupLocation : defaultCenter);
   
   // Ensure we have valid numbers
@@ -87,8 +87,9 @@ const LiveMap = ({ driverLocation, pickupLocation, deliveryLocation, routeStops 
               icon={stop.type === 'depot' ? deliveryIcon : routeIcon}
             >
               <Popup>
-                <strong>{(stop.type || 'PICKUP').toUpperCase()}:</strong> {stop.id} <br/>
-                Quantity: {stop.quantity || 'N/A'} kg
+                <strong>{stop.type === 'depot' ? 'DEPOT' : (stop.userName || stop.customer || stop.id)}</strong> <br/>
+                {stop.address && <><span>{stop.address}</span><br/></>}
+                {stop.quantity > 0 && <span>Qty: {stop.quantity} kg</span>}
               </Popup>
             </Marker>
           ) : null

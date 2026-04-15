@@ -87,8 +87,9 @@ const LiveMap = ({ driverLocation, pickupLocation, deliveryLocation, routeStops 
               icon={stop.type === 'depot' ? deliveryIcon : routeIcon}
             >
               <Popup>
-                <strong>{(stop.type || 'PICKUP').toUpperCase()}:</strong> {stop.id} <br/>
-                Quantity: {stop.quantity || 'N/A'} kg
+                <strong>{stop.type === 'depot' ? 'DEPOT' : (stop.userName || stop.customer || stop.id)}</strong> <br/>
+                {stop.address && <><span>{stop.address}</span><br/></>}
+                {stop.quantity > 0 && <span>Qty: {stop.quantity} kg</span>}
               </Popup>
             </Marker>
           ) : null
