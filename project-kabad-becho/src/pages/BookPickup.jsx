@@ -86,14 +86,11 @@ const BookPickup = ({ isOpen, onClose }) => {
     try {
        // Geocode the user's address using hybrid geocoder (local lookup + Nominatim)
        const coords = await geocodeAddress(formData.address);
-       let lat = coords?.lat;
-       let lng = coords?.lng;
+       let lat = coords?.lat || null;
+       let lng = coords?.lng || null;
 
-       // Fallback: Indore center if geocoding completely fails
-       if (!lat || !lng) {
-         lat = 22.7196;
-         lng = 75.8577;
-       }
+       // If geocoding fails, DON'T use hardcoded fallback — let admin re-geocode later
+       const wasGeocoded = !!(lat && lng);
 
        await addDoc(collection(db, "orders"), {
           ...formData,
@@ -102,8 +99,8 @@ const BookPickup = ({ isOpen, onClose }) => {
           status: 'pending',
           requestedAt: serverTimestamp(),
           scrapType: formData.scrapType.join(', '),
-          location: { lat, lng },
-          locationGeocoded: true
+          location: wasGeocoded ? { lat, lng } : null,
+          locationGeocoded: wasGeocoded
        });
        alert("Pickup scheduled successfully! You can track it in your dashboard.");
        onClose();

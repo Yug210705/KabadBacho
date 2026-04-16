@@ -84,30 +84,24 @@ const BookPickup = ({ isOpen, onClose }) => {
 
     setIsSubmitting(true);
     try {
-       // Geocode the user's address using hybrid geocoder (Nominatim first, local fallback)
+       // Geocode the user's address using hybrid geocoder (local lookup + Nominatim)
        const coords = await geocodeAddress(formData.address);
-       const geocodeSuccess = !!(coords?.lat && coords?.lng);
+       let lat = coords?.lat || null;
+       let lng = coords?.lng || null;
 
-       // Build order data — only include location if geocoding succeeded
-       const orderData = {
+       // If geocoding fails, DON'T use hardcoded fallback — let admin re-geocode later
+       const wasGeocoded = !!(lat && lng);
+
+       await addDoc(collection(db, "orders"), {
           ...formData,
           userId: user.uid,
           userName: formData.name || user.displayName || 'Anonymous',
           status: 'pending',
           requestedAt: serverTimestamp(),
           scrapType: formData.scrapType.join(', '),
-          locationGeocoded: geocodeSuccess
-       };
-
-       if (geocodeSuccess) {
-         orderData.location = { lat: coords.lat, lng: coords.lng };
-       } else {
-         // Store null location — background geocoder in Kabadi/Admin will retry
-         orderData.location = null;
-         console.warn(`[BookPickup] Geocoding failed for "${formData.address}", order saved without coordinates.`);
-       }
-
-       await addDoc(collection(db, "orders"), orderData);
+          location: wasGeocoded ? { lat, lng } : null,
+          locationGeocoded: wasGeocoded
+       });
        alert("Pickup scheduled successfully! You can track it in your dashboard.");
        onClose();
     } catch (err) {

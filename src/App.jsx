@@ -23,6 +23,7 @@ import UserRequests from "./components/admin/UserRequests.jsx";
 import UserManagement from "./components/admin/UserManagement.jsx";
 import PaymentsPricing from "./components/admin/PaymentsPricing.jsx";
 import ComplaintsSupport from "./components/admin/ComplaintsSupport.jsx";
+import PartnerManagement from "./components/admin/PartnerManagement.jsx";
 import ScrollToTop from "./components/ScrollToTop.jsx";
 import Kabadi from "./components/Kabadi.jsx";
 
@@ -59,6 +60,7 @@ const App = () => {
           <Route path="analytics" element={<AnalyticsReports />} />
           <Route path="requests" element={<UserRequests />} />
           <Route path="users" element={<UserManagement />} />
+          <Route path="partners" element={<PartnerManagement />} />
           <Route path="payments" element={<PaymentsPricing />} />
           <Route path="complaints" element={<ComplaintsSupport />} />
         </Route>

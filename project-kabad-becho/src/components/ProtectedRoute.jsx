@@ -33,14 +33,25 @@ const ProtectedRoute = ({ children, requiredRole = 'user' }) => {
           const userRole = (userData.role || 'user').toLowerCase();
           const targetRole = requiredRole.toLowerCase();
 
-          // If role doesn't match, redirect to the correct login for that section
-          if (userRole !== targetRole && !userData.isAdmin) {
-             console.warn("Unauthorized role:", userRole, "expected:", targetRole);
-             if (location.pathname.startsWith('/admin')) navigate("/admin/login", { replace: true });
-             else if (location.pathname.startsWith('/Kabadi')) navigate("/kabadi/login", { replace: true });
-             else navigate("/login", { replace: true });
-             return;
+          // STRICT ROLE CHECK — no cross-role access allowed
+          if (userRole !== targetRole) {
+            console.warn("Unauthorized role:", userRole, "expected:", targetRole);
+            // Sign them out to prevent stale sessions
+            await auth.signOut();
+            localStorage.removeItem('token');
+            if (location.pathname.startsWith('/admin')) navigate("/admin/login", { replace: true });
+            else if (location.pathname.startsWith('/Kabadi')) navigate("/kabadi/login", { replace: true });
+            else navigate("/login", { replace: true });
+            setLoading(false);
+            return;
           }
+        } else {
+          // User doc doesn't exist — redirect to login
+          await auth.signOut();
+          localStorage.removeItem('token');
+          navigate("/login", { replace: true });
+          setLoading(false);
+          return;
         }
       } catch (err) {
         console.error("Auth check failed", err);

@@ -1,13 +1,19 @@
 import React, { useState } from 'react';
-import { Mail, Lock, Eye, EyeOff, ArrowRight, Recycle, Leaf, Info, Loader2, Chrome, Phone, Shield, Truck, UserCircle } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, Recycle, Leaf, Info, Loader2, Chrome, Phone, Shield, Truck, UserCircle, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { auth, googleProvider, db } from '../firebase';
 import { signInWithEmailAndPassword, signInWithPopup, createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 
 const DEMO_CREDENTIALS = {
   email: 'demo@example.com',
   password: 'password123'
+};
+
+const ROLE_LABELS = {
+  user: 'Customer',
+  kabadi: 'Partner (Pickup Person)',
+  admin: 'Admin'
 };
 
 const KabadBechoLogin = ({ defaultRole = 'user' }) => {
@@ -27,6 +33,37 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
     return emailRegex.test(email);
   };
 
+  /**
+   * ROLE EXCLUSIVITY CHECK
+   * Queries Firestore to see if this email is already registered under a different role.
+   * Returns the existing role if conflict found, or null if OK to proceed.
+   */
+  const checkRoleExclusivity = async (userEmail, attemptedRole) => {
+    if (!db || !userEmail) return null;
+    try {
+      // Query all users with this email
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('email', '==', userEmail));
+      const snapshot = await getDocs(q);
+      
+      if (!snapshot.empty) {
+        for (const docSnap of snapshot.docs) {
+          const existingRole = (docSnap.data().role || 'user').toLowerCase();
+          const attempted = attemptedRole.toLowerCase();
+          
+          // If the existing role doesn't match the attempted role, block it
+          if (existingRole !== attempted) {
+            return existingRole;
+          }
+        }
+      }
+      return null; // No conflict — either new user or same role
+    } catch (err) {
+      console.error('Role exclusivity check failed:', err);
+      return null; // Fail open — let the normal auth flow handle it
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrors({});
@@ -38,6 +75,18 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
 
     setIsLoading(true);
     try {
+      // ─── ROLE EXCLUSIVITY: Check BEFORE attempting authentication ───
+      const conflictingRole = await checkRoleExclusivity(email, role);
+      if (conflictingRole) {
+        const conflictLabel = ROLE_LABELS[conflictingRole] || conflictingRole;
+        const attemptedLabel = ROLE_LABELS[role] || role;
+        setErrors({
+          general: `⚠️ This email is already registered as "${conflictLabel}". You cannot sign in as "${attemptedLabel}" with the same email. Please use a different email address, or login from the correct portal.`
+        });
+        setIsLoading(false);
+        return;
+      }
+
       let userCredential;
       if (view === 'signup') {
         userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -57,11 +106,15 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
       await syncUser(userCredential.user);
       
       // Navigate to correct dashboard based on role
-      localStorage.setItem('token', await userCredential.user.getIdToken()); // Ensure token is set for Navbar
+      localStorage.setItem('token', await userCredential.user.getIdToken());
       if (role === 'admin') navigate('/admin');
       else if (role === 'kabadi') navigate('/Kabadi');
       else navigate('/dashboard');
     } catch (error) {
+      // Sign out the user if auth succeeded but role check failed post-creation
+      if (auth.currentUser) {
+        try { await auth.signOut(); } catch (_) {}
+      }
       setErrors({ general: error.message || 'Authentication failed. Please try again.' });
       console.error(error);
     } finally {
@@ -69,6 +122,11 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
     }
   };
 
+  /**
+   * STRICT SYNC — Does NOT upgrade roles.
+   * New users: creates with selected role.
+   * Existing users: validates role match, throws error on mismatch.
+   */
   const syncUser = async (user) => {
     if (!db) return;
     const userRef = doc(db, 'users', user.uid);
@@ -82,7 +140,7 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
     };
 
     if (!snap.exists()) {
-      // New user registration
+      // New user — register with the selected role (locked permanently)
       await setDoc(userRef, {
         ...userData,
         role: role || 'user',
@@ -91,15 +149,22 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
         createdAt: serverTimestamp()
       });
     } else {
-       // Existing user - update role if they are logging into a specific higher-privilege portal
-       const existingRole = snap.data().role;
-       if (role === 'admin' && existingRole !== 'admin') {
-          await updateDoc(userRef, { role: 'admin', isAdmin: true });
-       } else if (role === 'kabadi' && existingRole !== 'kabadi' && existingRole !== 'admin') {
-          await updateDoc(userRef, { role: 'kabadi', isPartner: true });
-       } else {
-          await updateDoc(userRef, { lastLogin: serverTimestamp() });
-       }
+      // Existing user — enforce role match, NEVER upgrade
+      const existingRole = (snap.data().role || 'user').toLowerCase();
+      const attemptedRole = role.toLowerCase();
+      
+      if (existingRole !== attemptedRole) {
+        // Sign them out immediately — this should have been caught earlier but is a safety net
+        await auth.signOut();
+        throw new Error(
+          `This account is registered as "${ROLE_LABELS[existingRole] || existingRole}". ` +
+          `You cannot access the ${ROLE_LABELS[attemptedRole] || attemptedRole} portal. ` +
+          `Please use a different email or login from the correct portal.`
+        );
+      }
+      
+      // Same role — just update lastLogin
+      await setDoc(userRef, { ...snap.data(), lastLogin: serverTimestamp() }, { merge: true });
     }
     // Small buffer to ensure Firestore propagation before navigation
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -142,8 +207,23 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
 
   const handleGoogleLogin = async () => {
     setIsLoading(true);
+    setErrors({});
     try {
       const result = await signInWithPopup(auth, googleProvider);
+      
+      // ─── ROLE EXCLUSIVITY: Check after Google popup (we now have the email) ───
+      const conflictingRole = await checkRoleExclusivity(result.user.email, role);
+      if (conflictingRole) {
+        await auth.signOut(); // Sign out immediately
+        const conflictLabel = ROLE_LABELS[conflictingRole] || conflictingRole;
+        const attemptedLabel = ROLE_LABELS[role] || role;
+        setErrors({
+          general: `⚠️ This Google account is already registered as "${conflictLabel}". You cannot sign in as "${attemptedLabel}" with the same email. Please use a different Google account.`
+        });
+        setIsLoading(false);
+        return;
+      }
+      
       await syncUser(result.user);
       
       // Navigate based on role
@@ -151,6 +231,9 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
       else if (role === 'kabadi') navigate('/Kabadi');
       else navigate('/dashboard');
     } catch (error) {
+      if (auth.currentUser) {
+        try { await auth.signOut(); } catch (_) {}
+      }
       setErrors({ general: error.message || 'Google sign-in failed. Please try again.' });
       console.error(error);
     } finally {
@@ -178,7 +261,7 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
             ].map(r => (
               <button
                 key={r.id}
-                onClick={() => setRole(r.id)}
+                onClick={() => { setRole(r.id); setErrors({}); }}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all duration-300 ${
                   role === r.id 
                     ? 'bg-white text-[#2E7D32] shadow-sm scale-105' 
@@ -213,6 +296,12 @@ const KabadBechoLogin = ({ defaultRole = 'user' }) => {
             <p className="text-gray-500 font-medium">
               {view === 'login' ? config.subtitle : 'Join the green revolution today'}
             </p>
+          </div>
+
+          {/* Role Exclusivity Warning Banner */}
+          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700 font-medium flex items-start gap-2">
+            <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+            <span>Each email can only be registered under <strong>one role</strong> (Customer, Partner, or Admin). You cannot switch roles with the same email.</span>
           </div>
 
           {errors.general && (

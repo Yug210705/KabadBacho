@@ -44,6 +44,11 @@ const AdminLayout = () => {
       label: 'User Management', 
       path: '/admin/users' 
     },
+    {
+      icon: Briefcase,
+      label: 'Partner Mgmt',
+      path: '/admin/partners'
+    },
     { 
       icon: DollarSign, 
       label: 'Payments & Pricing', 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Truck,
   MapPin,
@@ -21,7 +21,9 @@ import {
   ChevronRight,
   ExternalLink,
   Loader2,
-  Award
+  Award,
+  Hash,
+  Route as RouteIcon
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import LiveMap from './User/LiveMap';
@@ -30,76 +32,18 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { collection, onSnapshot, query, where, doc, updateDoc, orderBy } from 'firebase/firestore';
 import { geocodeAddress } from '../utils/geocoder';
 
-const MOCK_PICKUPS = [
-  {
-    id: 'KB123457',
-    customer: 'Priya Sharma',
-    phone: '+91 98765 43211',
-    address: '456 Eco Avenue, Vijay Nagar, Indore',
-    lat: 22.7533, lng: 75.8937,
-    landmark: 'Near C21 Mall',
-    scrapType: 'Plastic Scrap',
-    emoji: '♻️',
-    estimatedWeight: '30 kg',
-    scheduledTime: '01:00 PM - 03:00 PM',
-    status: 'pending',
-    distance: '2.5 km',
-    expectedAmount: '₹300-450'
-  },
-  {
-    id: 'KB123458',
-    customer: 'Anjali Desai',
-    phone: '+91 98765 43212',
-    address: '789 Recycle Road, Rajwada, Indore',
-    lat: 22.7163, lng: 75.8540,
-    landmark: 'Behind Palace',
-    scrapType: 'E-Waste',
-    emoji: '📱',
-    estimatedWeight: '15 kg',
-    scheduledTime: '11:00 AM - 01:00 PM',
-    status: 'pending',
-    distance: '4.2 km',
-    expectedAmount: '₹300-750'
-  },
-  {
-    id: 'KB123459',
-    customer: 'Suresh Mehta',
-    phone: '+91 98765 43213',
-    address: '321 Sustainable Street, Palasia, Indore',
-    lat: 22.7244, lng: 75.8839,
-    landmark: 'Next to Apollo Hospital',
-    scrapType: 'Paper Scrap',
-    emoji: '📄',
-    estimatedWeight: '45 kg',
-    scheduledTime: '03:00 PM - 05:00 PM',
-    status: 'pending',
-    distance: '6.8 km',
-    expectedAmount: '₹450-810'
-  },
-  {
-    id: 'KB123456',
-    customer: 'Rajesh Kumar',
-    phone: '+91 98765 43210',
-    address: '123 Green Street, Rajwada, Indore',
-    lat: 22.7180, lng: 75.8550,
-    landmark: 'Near MG Road',
-    scrapType: 'Metal Scrap',
-    emoji: '🔩',
-    actualWeight: '45 kg',
-    scheduledTime: '09:00 AM - 11:00 AM',
-    status: 'completed',
-    distance: '3.2 km',
-    collectedAmount: '₹1,800',
-    completedAt: '09:45 AM',
-    date: 'Today'
-  }
-];
-
+// ─── Navigation Modal (sub-component) ───
 const NavigationModal = ({ pickup, onClose, driverLoc }) => {
   const [route, setRoute] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Only fetch route if we have valid coordinates
+    if (!pickup.lat || !pickup.lng || !driverLoc.lat || !driverLoc.lng) {
+      setLoading(false);
+      return;
+    }
+
     const fetchRoute = async () => {
       try {
         const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
@@ -159,24 +103,27 @@ const NavigationModal = ({ pickup, onClose, driverLoc }) => {
 
         <div className="p-6 border-t border-gray-100 flex flex-col sm:flex-row gap-4 items-center justify-between">
           <div className="flex items-center gap-4 text-sm text-gray-600">
-             <div className="flex items-center gap-1 font-bold"><Clock size={16}/> {pickup.distance} away</div>
+             <div className="flex items-center gap-1 font-bold"><Clock size={16}/> {pickup.distance || 'Calculating...'}</div>
              <div className="flex items-center gap-1 font-bold text-[#FF9800] uppercase tracking-wider">{pickup.scrapType}</div>
           </div>
-          <a 
-            href={`https://www.google.com/maps/dir/?api=1&origin=${driverLoc.lat},${driverLoc.lng}&destination=${pickup.lat},${pickup.lng}&travelmode=driving`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-4 bg-[#2196F3] text-white rounded-2xl font-bold shadow-lg hover:bg-[#1E88E5] transition transform active:scale-95"
-          >
-            <ExternalLink size={20} />
-            Open in Google Maps
-          </a>
+          {pickup.lat && pickup.lng && driverLoc.lat && driverLoc.lng && (
+            <a 
+              href={`https://www.google.com/maps/dir/?api=1&origin=${driverLoc.lat},${driverLoc.lng}&destination=${pickup.lat},${pickup.lng}&travelmode=driving`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-4 bg-[#2196F3] text-white rounded-2xl font-bold shadow-lg hover:bg-[#1E88E5] transition transform active:scale-95"
+            >
+              <ExternalLink size={20} />
+              Open in Google Maps
+            </a>
+          )}
         </div>
       </div>
     </div>
   );
 };
 
+// ─── Main Dashboard ───
 const KabadBechoDriverDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedPickup, setSelectedPickup] = useState(null);
@@ -185,38 +132,38 @@ const KabadBechoDriverDashboard = () => {
   const [navTarget, setNavTarget] = useState(null);
 
   const [pickups, setPickups] = useState([]);
+  const [assignedRoutes, setAssignedRoutes] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Real GPS location for driver — uses browser geolocation instead of hardcoded coords
-  const [driverGPS, setDriverGPS] = useState(null);
-  useEffect(() => {
-    if (!navigator.geolocation) return;
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        setDriverGPS({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        console.log(`[GPS] Driver location: ${pos.coords.latitude}, ${pos.coords.longitude}`);
-      },
-      (err) => console.warn('[GPS] Geolocation error:', err.message),
-      { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 }
-    );
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
+  const [driverLocation, setDriverLocation] = useState(null);
 
   const currentDriverId = auth.currentUser?.uid;
 
-  // Pickups relevant to this driver: assigned to them, or any pending/accepted orders
-  const myPickups = (pickups || []).filter(p => {
-    if (!p) return false;
-    // If assigned to this driver specifically
-    if (p.driverId === currentDriverId) return true;
-    // Show all pending/accepted orders (not assigned to a different specific driver)
-    if (p.status === 'pending' || p.status === 'accepted') return true;
-    // Show completed orders that were assigned to this driver
-    if (p.status === 'completed' && p.driverId === currentDriverId) return true;
-    return false;
-  });
+  // Get driver's real-time location (no hardcoding)
+  useEffect(() => {
+    if ('geolocation' in navigator) {
+      const watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          setDriverLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        },
+        (err) => console.warn('Geolocation error:', err),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+      );
+      return () => navigator.geolocation.clearWatch(watchId);
+    }
+  }, []);
 
-  const driverStats = {
+  // Pickups strictly assigned to this driver
+  const myPickups = useMemo(() => (pickups || []).filter(p => {
+    if (!p) return false;
+    return p.driverId === currentDriverId;
+  }), [pickups, currentDriverId]);
+
+  // Routes assigned to this driver
+  const myRoutes = useMemo(() => (assignedRoutes || []).filter(r => 
+    r.driverId === currentDriverId
+  ), [assignedRoutes, currentDriverId]);
+
+  const driverStats = useMemo(() => ({
     name: auth.currentUser?.displayName || 'Partner',
     id: auth.currentUser?.uid ? auth.currentUser.uid.slice(0, 6).toUpperCase() : ('DRV-' + Date.now().toString().slice(-4)),
     todayPickups: myPickups.length,
@@ -228,13 +175,13 @@ const KabadBechoDriverDashboard = () => {
          const amt = parseInt((curr.collectedAmount || curr.amount || '0').toString().replace(/[^\d]/g, '')) || 0;
          return acc + amt;
       }, 0).toLocaleString(),
-    rating: 4.8, // Fallback rating
+    rating: 4.8,
     totalTrips: myPickups.filter(p => p.status === 'completed').length, 
     joinedDate: 'Joined Recently',
     vehicleNo: 'Assignment Pending',
     phone: auth.currentUser?.phoneNumber || 'No phone set',
     email: auth.currentUser?.email || 'no-email@partner.com'
-  };
+  }), [myPickups]);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
@@ -243,23 +190,13 @@ const KabadBechoDriverDashboard = () => {
         return;
       }
 
-      // Background geocoder — fixes old orders with wrong/missing coordinates
+      // Background geocoder — fixes old orders with missing coordinates
       const geocodePending = async (orders) => {
         for (const order of orders) {
-          // Check if coordinates are missing, null, or suspiciously near old hardcoded fallbacks
           const lat = order.location?.lat;
           const lng = order.location?.lng;
-          const hasCoords = (typeof lat === 'number' && typeof lng === 'number' && lat !== 0 && lng !== 0);
-          const isFallback = !hasCoords || (
-            // Old "Mobile Wale" fallback coords
-            (Math.abs(lat - 22.7196) < 0.002 && Math.abs(lng - 75.8577) < 0.002) ||
-            // Old depot fallback coords
-            (Math.abs(lat - 22.7411) < 0.002 && Math.abs(lng - 75.8355) < 0.002) ||
-            // Other old fallback
-            (Math.abs(lat - 22.7750) < 0.002 && Math.abs(lng - 75.8750) < 0.002)
-          );
-
-          if (order.address && (!order.locationGeocoded || isFallback || !hasCoords)) {
+          // Only geocode if location is completely missing
+          if (order.address && !order.locationGeocoded && (!lat || !lng)) {
             try {
               const coords = await geocodeAddress(order.address);
               if (coords) {
@@ -268,7 +205,6 @@ const KabadBechoDriverDashboard = () => {
                   locationGeocoded: true,
                   geocodedAt: new Date().toISOString()
                 });
-                console.log(`[FORCE] Geocoded order ${order.id}: ${order.address} → [${coords.lat}, ${coords.lng}]`);
               }
             } catch (err) {
               console.warn("Geocoding failed for", order.id, err);
@@ -277,9 +213,9 @@ const KabadBechoDriverDashboard = () => {
         }
       };
 
-      // Real-time synchronization for personal accounts
-      const q = query(collection(db, "orders"));
-      const unsubscribeData = onSnapshot(q, (snapshot) => {
+      // Listen to orders
+      const ordersQuery = query(collection(db, "orders"));
+      const unsubOrders = onSnapshot(ordersQuery, (snapshot) => {
         const orders = snapshot.docs.map(docSnap => {
            const data = docSnap.data();
            return {
@@ -289,29 +225,18 @@ const KabadBechoDriverDashboard = () => {
               actualWeight: data.weight || 'N/A',
               estimatedWeight: data.weight || 'N/A',
               emoji: '♻️',
-              // Map location to top-level lat/lng for NavigationModal
-              lat: data.location?.lat || null,
-              lng: data.location?.lng || null,
+              // ONLY use real geocoded coordinates — NO fallbacks
+              lat: (data.location?.lat && typeof data.location.lat === 'number') ? data.location.lat : null,
+              lng: (data.location?.lng && typeof data.location.lng === 'number') ? data.location.lng : null,
               scheduledTime: data.time || data.preferredTime || 'Not set',
-              // Add fallback date if missing
               requestedAt: data.requestedAt || new Date().toLocaleString()
            };
         });
         setPickups(orders);
         setIsLoading(false);
 
-        // Auto-geocode orders that haven't been geocoded yet OR have suspicious coords
-        const needsGeocoding = orders.filter(o => {
-          if (!o.address) return false;
-          if (!o.locationGeocoded) return true;
-          // Also re-geocode orders near known bad fallback coordinates
-          const lat = o.location?.lat;
-          const lng = o.location?.lng;
-          if (!lat || !lng) return true;
-          if (Math.abs(lat - 22.7196) < 0.002 && Math.abs(lng - 75.8577) < 0.002) return true;
-          if (Math.abs(lat - 22.7411) < 0.002 && Math.abs(lng - 75.8355) < 0.002) return true;
-          return false;
-        });
+        // Auto-geocode orders missing coordinates
+        const needsGeocoding = orders.filter(o => o.address && !o.locationGeocoded && (!o.lat || !o.lng));
         if (needsGeocoding.length > 0) {
           geocodePending(needsGeocoding);
         }
@@ -320,55 +245,56 @@ const KabadBechoDriverDashboard = () => {
         setIsLoading(false);
       });
 
-      return () => unsubscribeData();
+      // Listen to routes assigned to this driver
+      const routesQuery = query(collection(db, "routes"));
+      const unsubRoutes = onSnapshot(routesQuery, (snapshot) => {
+        const routes = snapshot.docs.map(docSnap => {
+          const data = docSnap.data();
+          let parsedPolyline = null;
+          if (data.polyline && typeof data.polyline === 'string') {
+            try { parsedPolyline = JSON.parse(data.polyline); } catch (e) { console.error("Polyline parse error", e); }
+          } else {
+            parsedPolyline = data.polyline; // fallback for normal array if any
+          }
+          return {
+            id: docSnap.id,
+            ...data,
+            polyline: parsedPolyline
+          };
+        });
+        setAssignedRoutes(routes);
+      }, (err) => {
+        console.warn("Routes listener error:", err);
+      });
+
+      return () => {
+        unsubOrders();
+        unsubRoutes();
+      };
     });
 
     return () => unsubscribeAuth();
   }, []);
 
-  const filteredPickups = myPickups.filter(p => {
+  const filteredPickups = useMemo(() => myPickups.filter(p => {
      if (filterStatus === 'pending') return p.status === 'pending' || p.status === 'accepted';
      return p.status === filterStatus;
-  });
-
-  const getDistanceStr = (pickup) => {
-    if (pickup.distance) return pickup.distance; // from mock data or optimizer
-    if (!driverGPS || !driverGPS.lat || !driverGPS.lng || !pickup.lat || !pickup.lng) return 'TBA';
-    const p = 0.017453292519943295; // Math.PI / 180
-    const c = Math.cos;
-    const a = 0.5 - c((pickup.lat - driverGPS.lat) * p)/2 + 
-            c(driverGPS.lat * p) * c(pickup.lat * p) * 
-            (1 - c((pickup.lng - driverGPS.lng) * p))/2;
-    const dist = 12742 * Math.asin(Math.sqrt(a)); // 2 * R; R = 6371 km
-    return dist.toFixed(1) + ' km';
-  };
-
-  const getAmountStr = (pickup) => {
-    if (pickup.expectedAmount) return pickup.expectedAmount; // from mock data
-    const w = parseFloat(pickup.estimatedWeight);
-    if (isNaN(w) || w <= 0) return 'TBA (After Weigh-in)';
-    return `₹${w * 15} - ₹${w * 25}`;
-  };
-
+  }), [myPickups, filterStatus]);
+  
   const navigate = useNavigate();
 
-  const handleSignOut = async () => {
-    try {
-      const { signOut } = await import('firebase/auth');
-      await signOut(auth);
-    } catch(e) {
-      console.error(e);
-    }
+  const handleSignOut = useCallback(async () => {
+    await auth.signOut();
     localStorage.removeItem('token');
     navigate('/kabadi/login');
-  };
+  }, [navigate]);
 
-  const handleStartPickup = (pickup) => {
+  const handleStartPickup = useCallback((pickup) => {
     setNavTarget(pickup);
     setShowNavModal(true);
-  };
+  }, []);
 
-  const handleCompletePickup = async (pickupId) => {
+  const handleCompletePickup = useCallback(async (pickupId) => {
     try {
        const orderRef = doc(db, "orders", pickupId);
        await updateDoc(orderRef, {
@@ -379,8 +305,9 @@ const KabadBechoDriverDashboard = () => {
     } catch (e) {
        console.error("Failed to complete pickup:", e);
     }
-  };
+  }, []);
 
+  // ─── Sidebar ───
   const Sidebar = () => (
     <div className="w-64 bg-white shadow-xl h-screen sticky top-0 flex flex-col z-50 transition-all duration-300 hidden md:flex">
       <div className="p-6 border-b border-gray-100">
@@ -393,6 +320,7 @@ const KabadBechoDriverDashboard = () => {
       <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
         {[
           { id: 'overview', icon: LayoutDashboard, label: 'Overview' },
+          { id: 'routes', icon: RouteIcon, label: 'My Routes' },
           { id: 'previous', icon: History, label: 'Previous Pickups' },
           { id: 'profile', icon: Settings, label: 'Profile Settings' },
         ].map((item) => (
@@ -444,6 +372,7 @@ const KabadBechoDriverDashboard = () => {
     <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-50 flex justify-around p-2">
         {[
           { id: 'overview', icon: LayoutDashboard, label: 'Overview' },
+          { id: 'routes', icon: RouteIcon, label: 'Routes' },
           { id: 'previous', icon: History, label: 'History' },
           { id: 'profile', icon: Settings, label: 'Profile' },
         ].map((item) => (
@@ -458,6 +387,104 @@ const KabadBechoDriverDashboard = () => {
             <span className="text-[10px] font-medium mt-1">{item.label}</span>
           </button>
         ))}
+    </div>
+  );
+
+  // ─── My Routes Tab (shows optimized route sequences from admin) ───
+  const MyRoutes = () => (
+    <div className="p-8 animate-fadeIn pb-24 md:pb-8">
+      <h2 className="text-2xl font-bold text-[#5D4037] mb-2">My Assigned Routes</h2>
+      <p className="text-gray-500 text-sm mb-6">Routes optimized by admin using Clarke-Wright algorithm. Follow the sequence numbers for optimal pickup order.</p>
+      
+      {myRoutes.length === 0 ? (
+        <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-12 text-center">
+          <div className="inline-flex items-center justify-center w-20 h-20 bg-[#E8F5E9] rounded-full mb-4">
+            <RouteIcon className="text-[#66BB6A]" size={40} />
+          </div>
+          <h3 className="text-2xl font-bold text-[#5D4037] mb-2">No Routes Assigned</h3>
+          <p className="text-gray-600">The admin hasn't assigned routes yet. Check back soon.</p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {myRoutes.map((route) => (
+            <div key={route.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+              {/* Route Header */}
+              <div className="p-4 bg-gradient-to-r from-[#E8F5E9] to-[#F1F8E9] border-b border-gray-100">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-[#4CAF50] rounded-xl flex items-center justify-center text-white">
+                      <RouteIcon size={20} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-[#2E7D32]">{route.shiftSlot?.toUpperCase()} SHIFT</h3>
+                      <p className="text-xs text-gray-500">
+                        {route.scrapType && <span className="uppercase font-bold text-purple-600">{route.scrapType}</span>}
+                        {' · '}{route.date}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xs font-bold px-2 py-1 bg-blue-50 text-blue-700 rounded-md border border-blue-100">{route.totalQuantity} kg</span>
+                    <p className="text-[10px] text-gray-400 mt-1">{route.estimatedDistanceKm?.toFixed(1)} km est.</p>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Optimized Pickup Sequence */}
+              <div className="p-4">
+                <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
+                  <Hash size={14} className="text-[#4CAF50]" /> Pickup Sequence (Follow this order)
+                </h4>
+                <div className="ml-2 border-l-2 border-dashed border-[#C8E6C9] pl-4 space-y-3">
+                  {(route.stops || []).map((stop, sIdx) => (
+                    <div key={sIdx} className="relative">
+                      <div className={`absolute -left-[21px] top-1.5 w-3 h-3 rounded-full border-2 border-white shadow-sm ${
+                        stop.type === 'depot' ? 'bg-[#4CAF50]' : 'bg-[#FF9800]'
+                      }`}></div>
+                      <div className="flex items-start gap-2">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full mt-0.5 ${
+                          stop.type === 'depot' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                        }`}>
+                          #{stop.sequenceNumber}
+                        </span>
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-gray-800">
+                            {stop.type === 'depot' ? '🏭 Depot (Start/End)' : `📍 ${stop.userName || stop.id}`}
+                          </p>
+                          {stop.address && <p className="text-xs text-gray-500 mt-0.5">{stop.address}</p>}
+                          {stop.quantity > 0 && <p className="text-xs text-blue-600 font-medium mt-0.5">Collect {stop.quantity} kg</p>}
+                        </div>
+                        {stop.type === 'request' && stop.lat && stop.lng && (
+                          <a 
+                            href={`https://www.google.com/maps/dir/?api=1&destination=${stop.lat},${stop.lng}&travelmode=driving`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-2 bg-blue-50 rounded-lg text-blue-600 hover:bg-blue-100 transition flex-shrink-0"
+                          >
+                            <Navigation size={14} />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Route Map */}
+              {route.stops?.some(s => s.lat && s.lng) && (
+                <div className="p-4 pt-0">
+                  <div className="h-[200px] rounded-xl overflow-hidden">
+                    <LiveMap 
+                      routeStops={route.stops.filter(s => s.lat && s.lng)}
+                      complexRoute={route.polyline || null}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 
@@ -508,20 +535,22 @@ const KabadBechoDriverDashboard = () => {
             ))}
           </div>
 
-          {/* New Optimized Shift Map */}
-          <div className="mt-8 bg-white/10 backdrop-blur-md p-2 rounded-2xl border border-white/20">
-             <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 mb-2">
-                <h3 className="font-bold text-sm tracking-wide">YOUR OPTIMIZED SHIFT ROUTE (UNIFIED VIEW)</h3>
-                <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full uppercase">Indore North Shift</span>
-             </div>
-             <div className="h-[250px] rounded-xl overflow-hidden shadow-inner">
-                <LiveMap 
-                  routeStops={myPickups.filter(p => p.status === 'pending' || p.status === 'accepted')}
-                  complexRoute={null} // This would be the combined shift polyline from the engine
-                />
-             </div>
-             <p className="text-[10px] text-center mt-2 opacity-80 italic">The route above is synchronized with the Admin's latest optimization.</p>
-          </div>
+          {/* Active Route Map — only show if routes exist with valid coords */}
+          {myRoutes.length > 0 && (
+            <div className="mt-8 bg-white/10 backdrop-blur-md p-2 rounded-2xl border border-white/20">
+               <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 mb-2">
+                  <h3 className="font-bold text-sm tracking-wide">YOUR OPTIMIZED SHIFT ROUTE</h3>
+                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full uppercase">{myRoutes[0]?.shiftSlot} Shift</span>
+               </div>
+               <div className="h-[250px] rounded-xl overflow-hidden shadow-inner">
+                  <LiveMap 
+                    routeStops={(myRoutes[0]?.stops || []).filter(s => s.lat && s.lng)}
+                    complexRoute={myRoutes[0]?.polyline || null}
+                  />
+               </div>
+               <p className="text-[10px] text-center mt-2 opacity-80 italic">Route synchronized with the Admin's latest optimization.</p>
+            </div>
+          )}
         </div>
       </section>
 
@@ -571,6 +600,11 @@ const KabadBechoDriverDashboard = () => {
                           <div>
                             <h3 className="text-xl font-bold text-[#5D4037]">{pickup.id}</h3>
                             <p className="text-gray-600 font-medium">{pickup.scrapType}</p>
+                            {pickup.sequenceNumber && (
+                              <span className="text-xs font-bold px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">
+                                Sequence #{pickup.sequenceNumber}
+                              </span>
+                            )}
                           </div>
                         </div>
                         {pickup.status === 'completed' && (
@@ -581,16 +615,16 @@ const KabadBechoDriverDashboard = () => {
                       </div>
                       <div className="bg-[#F8FAF8] p-4 rounded-xl border border-gray-100">
                         <div className="flex items-center space-x-3 mb-3">
-                          <div className="w-10 h-10 bg-gradient-to-br from-[#66BB6A] to-[#4CAF50] rounded-full flex items-center justify-center text-white font-bold">{pickup.customer.charAt(0)}</div>
+                          <div className="w-10 h-10 bg-gradient-to-br from-[#66BB6A] to-[#4CAF50] rounded-full flex items-center justify-center text-white font-bold">{pickup.customer?.charAt(0) || '?'}</div>
                           <div className="flex-1">
                             <div className="font-bold text-[#5D4037]">{pickup.customer}</div>
                             <div className="flex items-center space-x-2 text-sm text-gray-600"><Phone size={14} /><span>{pickup.phone}</span></div>
                           </div>
-                          <a href={`tel:${pickup.phone}`} className="p-2 bg-white border border-gray-200 rounded-lg"><Phone size={18} /></a>
+                          {pickup.phone && <a href={`tel:${pickup.phone}`} className="p-2 bg-white border border-gray-200 rounded-lg"><Phone size={18} /></a>}
                         </div>
                         <div className="flex items-start space-x-2 text-sm text-gray-700">
                           <MapPin className="flex-shrink-0 mt-0.5 text-[#66BB6A]" size={16} />
-                          <div><p className="font-medium">{pickup.address}</p><p className="text-gray-500 mt-1 text-xs">Landmark: {pickup.landmark}</p></div>
+                          <div><p className="font-medium">{pickup.address || 'Address not set'}</p>{pickup.landmark && <p className="text-gray-500 mt-1 text-xs">Landmark: {pickup.landmark}</p>}</div>
                         </div>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -600,7 +634,7 @@ const KabadBechoDriverDashboard = () => {
                         </div>
                         <div className="bg-gray-50 p-3 rounded-xl border border-gray-100">
                           <div className="text-xs text-gray-500 mb-1 flex items-center gap-1"><Navigation size={12}/> Dist</div>
-                          <div className="font-semibold text-sm text-[#5D4037]">{getDistanceStr(pickup)}</div>
+                          <div className="font-semibold text-sm text-[#5D4037]">{pickup.distance || 'N/A'}</div>
                         </div>
                         <div className="bg-gray-50 p-3 rounded-xl border border-gray-100">
                           <div className="text-xs text-gray-500 mb-1 flex items-center gap-1"><Scale size={12}/> Weight</div>
@@ -608,14 +642,16 @@ const KabadBechoDriverDashboard = () => {
                         </div>
                         <div className="bg-gray-50 p-3 rounded-xl border border-gray-100">
                           <div className="text-xs text-gray-500 mb-1 flex items-center gap-1"><DollarSign size={12}/> Amount</div>
-                          <div className="font-semibold text-sm text-[#66BB6A]">{pickup.status === 'completed' ? pickup.collectedAmount : getAmountStr(pickup)}</div>
+                          <div className="font-semibold text-sm text-[#66BB6A]">{pickup.status === 'completed' ? pickup.collectedAmount : pickup.expectedAmount}</div>
                         </div>
                       </div>
                     </div>
                     <div className="lg:w-48 flex flex-col gap-3 justify-center">
                       {pickup.status !== 'completed' ? (
                         <>
-                          <button onClick={() => handleStartPickup(pickup)} className="flex items-center justify-center space-x-2 px-4 py-3 bg-gradient-to-r from-[#66BB6A] to-[#4CAF50] text-white font-semibold rounded-xl transition transform hover:-translate-y-1"><Navigation size={18} /><span>Navigate</span></button>
+                          {pickup.lat && pickup.lng && (
+                            <button onClick={() => handleStartPickup(pickup)} className="flex items-center justify-center space-x-2 px-4 py-3 bg-gradient-to-r from-[#66BB6A] to-[#4CAF50] text-white font-semibold rounded-xl transition transform hover:-translate-y-1"><Navigation size={18} /><span>Navigate</span></button>
+                          )}
                           <button onClick={() => setSelectedPickup(pickup)} className="flex items-center justify-center space-x-2 px-4 py-3 bg-white border-2 border-[#66BB6A] text-[#66BB6A] font-semibold rounded-xl hover:bg-[#E8F5E9] transition"><CheckCircle size={18} /><span>Complete</span></button>
                         </>
                       ) : (
@@ -689,11 +725,18 @@ const KabadBechoDriverDashboard = () => {
       <Sidebar />
       <main className="flex-1 overflow-x-hidden overflow-y-auto h-screen">
         {activeTab === 'overview' && <Overview />}
+        {activeTab === 'routes' && <MyRoutes />}
         {activeTab === 'previous' && <PreviousPickups />}
         {activeTab === 'profile' && <ProfileSettings />}
       </main>
       <MobileTabBar />
-      {showNavModal && navTarget && <NavigationModal pickup={navTarget} onClose={() => setShowNavModal(false)} driverLoc={driverGPS || { lat: 22.7244, lng: 75.8839 }} />}
+      {showNavModal && navTarget && (
+        <NavigationModal 
+          pickup={navTarget} 
+          onClose={() => setShowNavModal(false)} 
+          driverLoc={driverLocation || { lat: null, lng: null }} 
+        />
+      )}
       {selectedPickup && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full p-8 animate-fadeIn">

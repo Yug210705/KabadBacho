@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Truck, X, Route as RouteIcon, Target, Loader2 } from 'lucide-react';
+import { Truck, X, Route as RouteIcon, Target, Loader2, Hash, MapPin, Clock, Package } from 'lucide-react';
 import LiveMap from '../User/LiveMap';
 import { db } from '../../firebase';
-import { collection, getDocs, query, where, writeBatch, doc } from 'firebase/firestore';
+import { collection, getDocs, query, where, writeBatch, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
   const [loading, setLoading] = useState(false);
@@ -41,15 +41,35 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
     setLoading(true);
     setError('');
 
-    // Prepare payload
+    // Filter only requests with real geocoded coordinates (NO hardcoding)
+    const validRequests = requests
+      .filter(r => r.status === 'pending' || r.status === 'accepted')
+      .filter(r => {
+        // ONLY use orders that have been properly geocoded with real coordinates
+        const lat = r.location?.lat;
+        const lng = r.location?.lng;
+        if (!lat || !lng) return false;
+        if (typeof lat !== 'number' || typeof lng !== 'number') return false;
+        // Reject suspicious fallback coordinates
+        if (Math.abs(lat) < 1 || Math.abs(lng) < 1) return false;
+        return true;
+      });
+
+    if (validRequests.length === 0) {
+      setError('No requests with valid geocoded addresses found. Ensure pickup addresses have been properly geocoded before optimization.');
+      setLoading(false);
+      return;
+    }
+
+    // Prepare payload — ONLY real coordinates, no fallbacks
     const payload = {
-      depot: { id: "INDORE_DEPOT", lat: 22.7411, lng: 75.8355 },
+      depot: { id: "INDORE_DEPOT", lat: 22.7411, lng: 75.8355 }, // Admin's depot in Indore
       vehicleCapacity: 800,
-      vehicles: availableDrivers.map((d, index) => ({ id: d.id, status: "available" })),
-      requests: requests.filter(r => r.status === 'pending' || r.status === 'accepted').map(r => ({
+      vehicles: availableDrivers.map((d) => ({ id: d.id, status: "available", name: d.name })),
+      requests: validRequests.map(r => ({
         id: r.id,
-        lat: r.location?.lat || 22.7196,
-        lng: r.location?.lng || 75.8577,
+        lat: r.location.lat,
+        lng: r.location.lng,
         quantity: parseInt(r.quantity) || parseInt(r.weight) || 50,
         timeSlot: r.preferredTime?.toLowerCase().includes('am') || r.time?.toLowerCase().includes('morning') ? 'morning' : 'evening',
         scrapType: r.scrapType || 'mixed',
@@ -79,32 +99,77 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
     }
   };
 
+  /**
+   * Save optimized routes to Firestore:
+   * 1. Write each route to a 'routes' collection (for pickup persons to read)
+   * 2. Update individual orders with driverId + sequence info
+   */
   const handleSaveAndAssign = async () => {
     try {
       const batch = writeBatch(db);
       let hasUpdates = false;
+      const routeDate = new Date().toISOString().split('T')[0]; // Today's date
 
-      Object.keys(routesData).forEach(timeSlot => {
-        routesData[timeSlot].forEach(route => {
-          route.stops.forEach(stop => {
+      for (const timeSlot of Object.keys(routesData)) {
+        const routes = routesData[timeSlot];
+        
+        for (let routeIdx = 0; routeIdx < routes.length; routeIdx++) {
+          const route = routes[routeIdx];
+          const routeId = `${routeDate}_${timeSlot}_${routeIdx}`;
+          
+          // ─── Save route document for pickup persons ───
+          const routeRef = doc(db, "routes", routeId);
+          await setDoc(routeRef, {
+            routeId,
+            driverId: route.vehicleId,
+            driverName: route.driverName || route.vehicleId,
+            shiftSlot: timeSlot,
+            scrapType: route.scrapType || 'mixed',
+            totalQuantity: route.totalQuantity,
+            estimatedDistanceKm: route.estimatedDistanceKm,
+            realDistanceKm: route.realDistanceKm,
+            stops: route.stops.map(s => ({
+              id: s.id,
+              lat: s.lat,
+              lng: s.lng,
+              quantity: s.quantity,
+              type: s.type,
+              sequenceNumber: s.sequenceNumber,
+              requestIds: s.requestIds || [],
+              userName: s.userName || '',
+              address: s.address || ''
+            })),
+            polyline: route.polyline || null,
+            createdAt: serverTimestamp(),
+            date: routeDate,
+            status: 'assigned'
+          });
+
+          // ─── Update individual orders ───
+          route.stops.forEach((stop, sIdx) => {
             if (stop.type === 'request' && stop.requestIds) {
               stop.requestIds.forEach(reqId => {
                 const reqRef = doc(db, "orders", reqId);
                 batch.update(reqRef, {
                   status: 'accepted',
                   driverId: route.vehicleId,
-                  assignedDate: new Date().toLocaleString()
+                  driverName: route.driverName || route.vehicleId,
+                  assignedDate: new Date().toLocaleString(),
+                  routeId: routeId,
+                  sequenceNumber: stop.sequenceNumber,
+                  shiftSlot: timeSlot,
+                  scrapType: route.scrapType
                 });
                 hasUpdates = true;
               });
             }
           });
-        });
-      });
+        }
+      }
 
       if (hasUpdates) {
         await batch.commit();
-        alert("Successfully committed optimized routes. Drivers will now see their assigned shifts.");
+        alert("✅ Routes committed successfully!\n\nDrivers will now see their assigned shifts and optimized pickup sequence in their dashboards.");
       } else {
         alert("No requests were assigned.");
       }
@@ -115,6 +180,15 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
     }
   };
 
+  // Count valid geocoded requests
+  const geocodedCount = requests.filter(r => 
+    (r.status === 'pending' || r.status === 'accepted') && 
+    r.location?.lat && r.location?.lng &&
+    typeof r.location.lat === 'number' && typeof r.location.lng === 'number'
+  ).length;
+
+  const totalPending = requests.filter(r => r.status === 'pending' || r.status === 'accepted').length;
+
   return (
     <div className="fixed inset-0 bg-black/50 flex justify-center z-[100] p-4 py-10 overflow-auto">
       <div className="bg-white rounded-xl w-full max-w-5xl shadow-2xl flex flex-col min-h-full">
@@ -123,7 +197,7 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
             <h2 className="text-2xl font-black text-[#2e7d32] flex items-center gap-2">
               <RouteIcon className="text-[#4CAF50]" /> AI Route Optimization Engine
             </h2>
-            <p className="text-sm text-[#4CAF50] font-medium mt-1">Clarke-Wright CVRP Algorithm (Haversine & Real-world Constraints)</p>
+            <p className="text-sm text-[#4CAF50] font-medium mt-1">Clarke-Wright CVRP Algorithm — Strict Constraint Enforcement</p>
           </div>
           <button onClick={onClose} className="p-2 bg-white rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50 transition">
             <X size={24} />
@@ -132,17 +206,36 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
 
         <div className="p-6 flex-1 flex flex-col">
           {!routesData && !loading && (
-            <div className="text-center py-20 flex flex-col items-center">
+            <div className="text-center py-16 flex flex-col items-center">
               <Target size={64} className="text-[#81C784] mb-4 opacity-50" />
-              <h3 className="text-xl font-bold text-gray-700 mb-2">Ready to Optimize {requests.length} Requests?</h3>
-              <p className="text-gray-500 max-w-md mx-auto mb-6">
-                Our AI-driven engine groups requests by time slot and scrap type, then calculates the most efficient vehicle routing using the Clarke-Wright savings algorithm.
-              </p>
+              <h3 className="text-xl font-bold text-gray-700 mb-2">Ready to Optimize {geocodedCount} Requests?</h3>
+              
+              {/* Constraint Summary */}
+              <div className="text-left max-w-md mx-auto mb-6 bg-gray-50 p-4 rounded-xl border border-gray-200">
+                <h4 className="font-bold text-sm text-gray-700 mb-3">Constraints Applied:</h4>
+                <ul className="space-y-1.5 text-xs text-gray-600">
+                  <li className="flex items-center gap-2">✅ Separate van per scrap type — no mixing</li>
+                  <li className="flex items-center gap-2">✅ Morning/Evening shifts — independent problems</li>
+                  <li className="flex items-center gap-2">✅ Vehicle capacity = 800 kg max</li>
+                  <li className="flex items-center gap-2">✅ Each pickup visited exactly once</li>
+                  <li className="flex items-center gap-2">✅ Every route starts & ends at depot</li>
+                  <li className="flex items-center gap-2">✅ Savings sorted descending — deterministic</li>
+                  <li className="flex items-center gap-2">✅ One driver per shift only</li>
+                </ul>
+              </div>
+
+              {geocodedCount < totalPending && (
+                <p className="text-amber-600 text-sm font-medium mb-4 bg-amber-50 p-3 rounded-lg border border-amber-200">
+                  ⚠️ {totalPending - geocodedCount} of {totalPending} pending requests have no geocoded address and will be skipped.
+                </p>
+              )}
+
               <button 
                 onClick={handleOptimize}
-                className="bg-[#4CAF50] text-white px-8 py-4 rounded-xl font-bold text-lg hover:bg-[#388E3C] shadow-lg shadow-green-500/30 transition transform hover:scale-105 flex items-center gap-2"
+                disabled={geocodedCount === 0}
+                className="bg-[#4CAF50] text-white px-8 py-4 rounded-xl font-bold text-lg hover:bg-[#388E3C] shadow-lg shadow-green-500/30 transition transform hover:scale-105 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
               >
-                <RouteIcon /> Run Optimization
+                <RouteIcon /> Run Optimization ({geocodedCount} orders)
               </button>
               {error && <p className="text-red-500 mt-4 text-sm font-semibold bg-red-50 p-3 rounded-lg border border-red-200">{error}</p>}
             </div>
@@ -166,27 +259,47 @@ const RouteOptimizerModal = ({ isOpen, onClose, requests }) => {
 
                   {Object.keys(routesData).map(timeSlot => (
                     <div key={timeSlot} className="mb-6">
-                      <h4 className="font-bold text-[#388E3C] uppercase text-sm mb-3 tracking-wider border-l-4 border-[#4CAF50] pl-2">{timeSlot} Shift</h4>
+                      <h4 className="font-bold text-[#388E3C] uppercase text-sm mb-3 tracking-wider border-l-4 border-[#4CAF50] pl-2 flex items-center gap-2">
+                        <Clock size={14} /> {timeSlot} Shift
+                      </h4>
                       <div className="space-y-4">
                         {routesData[timeSlot].map((route, idx) => (
                           <div key={idx} className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 hover:shadow-md transition">
                             <div className="flex justify-between items-start mb-2">
-                              <span className="font-bold text-gray-700 flex items-center gap-1"><Truck size={16} className="text-[#2196F3]"/> {route.vehicleId}</span>
-                              <span className="text-xs font-bold px-2 py-1 bg-blue-50 text-blue-700 rounded-md border border-blue-100">{route.totalQuantity} kg load</span>
+                              <div>
+                                <span className="font-bold text-gray-700 flex items-center gap-1"><Truck size={16} className="text-[#2196F3]"/> {route.driverName || route.vehicleId}</span>
+                                {route.scrapType && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 bg-purple-50 text-purple-700 rounded-md border border-purple-100 ml-1 uppercase">{route.scrapType}</span>
+                                )}
+                              </div>
+                              <span className="text-xs font-bold px-2 py-1 bg-blue-50 text-blue-700 rounded-md border border-blue-100">{route.totalQuantity} kg</span>
                             </div>
-                            <p className="text-xs text-gray-500 mb-3 font-semibold">Dist: <span className="text-gray-800">{route.estimatedDistanceKm.toFixed(2)} km</span></p>
+                            <p className="text-xs text-gray-500 mb-3 font-semibold">
+                              Haversine: <span className="text-gray-800">{route.estimatedDistanceKm?.toFixed(2)} km</span>
+                              {route.realDistanceKm && route.realDistanceKm !== route.estimatedDistanceKm && (
+                                <> | Road: <span className="text-blue-600">{route.realDistanceKm?.toFixed(2)} km</span></>
+                              )}
+                            </p>
                             
+                            {/* Optimized Pickup Sequence — visible to admin */}
                             <div className="ml-2 border-l-2 border-dashed border-gray-300 pl-4 space-y-3 relative">
                               {route.stops.map((stop, sIdx) => (
                                 <div key={sIdx} className="relative">
                                   <div className={`absolute -left-[21px] top-1 w-2 h-2 rounded-full ${stop.type === 'depot' ? 'bg-[#4CAF50] ring-2 ring-[#C8E6C9]' : 'bg-[#FF9800] ring-2 ring-[#FFE0B2]'}`}></div>
-                                  <p className="text-sm font-semibold text-gray-800 leading-tight">
-                                    {stop.type === 'depot' ? 'Central Depot' : `${stop.userName || stop.id}`}
-                                  </p>
+                                  <div className="flex items-center gap-2">
+                                    {stop.sequenceNumber !== undefined && (
+                                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${stop.type === 'depot' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                                        #{stop.sequenceNumber}
+                                      </span>
+                                    )}
+                                    <p className="text-sm font-semibold text-gray-800 leading-tight">
+                                      {stop.type === 'depot' ? '🏭 Central Depot' : `📍 ${stop.userName || stop.id}`}
+                                    </p>
+                                  </div>
                                   {stop.type !== 'depot' && stop.address && (
-                                    <p className="text-xs text-gray-500 mt-0.5">{stop.address}</p>
+                                    <p className="text-xs text-gray-500 mt-0.5 ml-8">{stop.address}</p>
                                   )}
-                                  {stop.quantity > 0 && <p className="text-xs text-gray-500 mt-0.5">Collect {stop.quantity} kg</p>}
+                                  {stop.quantity > 0 && <p className="text-xs text-gray-500 mt-0.5 ml-8">Collect {stop.quantity} kg</p>}
                                 </div>
                               ))}
                             </div>

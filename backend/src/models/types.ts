@@ -10,6 +10,8 @@ export interface Depot extends GeoPoint {
 export interface Vehicle {
   id: string;
   status: string; // 'available', etc.
+  name?: string;
+  shift?: string; // 'morning' | 'evening'
 }
 
 export interface PickupRequest {
@@ -38,17 +40,21 @@ export interface RouteStop {
   quantity: number;
   type?: 'depot' | 'request';
   requestIds?: string[]; // In case we merged overlapping requests
+  sequenceNumber?: number; // Order in which the pickup person visits this stop
   userName?: string;
   address?: string;
 }
 
 export interface RouteDetail {
   vehicleId?: string;
+  driverName?: string;
+  shiftSlot?: string; // 'morning' | 'evening'
+  scrapType?: string; // The scrap type for this route (no mixing)
   stops: RouteStop[];
   totalQuantity: number;
   estimatedDistanceKm: number; // Haversine based
-  realDistanceKm?: number; // Google Maps based
-  polyline?: string; // Google Maps encoded polyline
+  realDistanceKm?: number; // OSRM road-aware distance
+  polyline?: string; // OSRM road-aware polyline
 }
 
 export interface OptimizationResponse {

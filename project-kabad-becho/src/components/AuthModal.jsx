@@ -1,13 +1,19 @@
 import React, { useState } from 'react';
-import { X, Mail, Lock, User, Phone, MapPin, Eye, EyeOff, Loader2, Info, Chrome } from 'lucide-react';
+import { X, Mail, Lock, User, Phone, MapPin, Eye, EyeOff, Loader2, Info, Chrome, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { auth, googleProvider, db } from '../firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, sendPasswordResetEmail } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 
 const DEMO_CREDENTIALS = {
   email: 'demo@example.com',
   password: 'password123'
+};
+
+const ROLE_LABELS = {
+  user: 'Customer',
+  kabadi: 'Partner (Pickup Person)',
+  admin: 'Admin'
 };
 
 // InputField moved outside the component to prevent re-renders losing focus
@@ -35,6 +41,33 @@ const InputField = ({ icon: Icon, type, placeholder, label, value, onChange, err
   </div>
 );
 
+/**
+ * ROLE EXCLUSIVITY CHECK
+ * AuthModal is only used for 'user' role login.
+ * Checks if the given email is already registered under a different role (admin/kabadi).
+ */
+const checkRoleExclusivity = async (userEmail) => {
+  if (!db || !userEmail) return null;
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('email', '==', userEmail));
+    const snapshot = await getDocs(q);
+    
+    if (!snapshot.empty) {
+      for (const docSnap of snapshot.docs) {
+        const existingRole = (docSnap.data().role || 'user').toLowerCase();
+        if (existingRole !== 'user') {
+          return existingRole; // Conflict — email is registered as admin or kabadi
+        }
+      }
+    }
+    return null; // No conflict
+  } catch (err) {
+    console.error('Role exclusivity check failed:', err);
+    return null;
+  }
+};
+
 const AuthModal = ({ isOpen, onClose, redirectPath }) => {
   const [view, setView] = useState('login'); // 'login', 'signup', 'forgot'
   const navigate = useNavigate();
@@ -59,6 +92,17 @@ const AuthModal = ({ isOpen, onClose, redirectPath }) => {
 
     setIsLoading(true);
     try {
+      // ─── ROLE EXCLUSIVITY CHECK ───
+      const conflictingRole = await checkRoleExclusivity(email);
+      if (conflictingRole) {
+        const conflictLabel = ROLE_LABELS[conflictingRole] || conflictingRole;
+        setErrors({
+          general: `⚠️ This email is already registered as "${conflictLabel}". You cannot sign in as a Customer with the same email. Please use a different email or login from the correct portal.`
+        });
+        setIsLoading(false);
+        return;
+      }
+
       let userCredential;
       try {
         userCredential = await signInWithEmailAndPassword(auth, email, password);
@@ -78,7 +122,10 @@ const AuthModal = ({ isOpen, onClose, redirectPath }) => {
       navigate(redirectPath || '/dashboard');
     } catch (error) {
       console.error(error);
-      setErrors({ general: 'Invalid login. Please check your credentials.' });
+      if (auth.currentUser) {
+        try { await auth.signOut(); } catch (_) {}
+      }
+      setErrors({ general: error.message || 'Invalid login. Please check your credentials.' });
     } finally {
       setIsLoading(false);
     }
@@ -96,10 +143,20 @@ const AuthModal = ({ isOpen, onClose, redirectPath }) => {
         displayName: user.displayName || signupData.name || 'User',
         phone: signupData.phone || '',
         address: signupData.address || '',
-        role: 'user', // default role
+        role: 'user', // always user from this modal
         createdAt: serverTimestamp(),
         ...additionalData
       });
+    } else {
+      // Existing user — enforce role match
+      const existingRole = (snap.data().role || 'user').toLowerCase();
+      if (existingRole !== 'user') {
+        await auth.signOut();
+        throw new Error(
+          `This account is registered as "${ROLE_LABELS[existingRole] || existingRole}". ` +
+          `You cannot access the Customer portal. Please use a different email.`
+        );
+      }
     }
   };
 
@@ -113,12 +170,26 @@ const AuthModal = ({ isOpen, onClose, redirectPath }) => {
 
     setIsLoading(true);
     try {
+      // ─── ROLE EXCLUSIVITY CHECK ───
+      const conflictingRole = await checkRoleExclusivity(signupData.email);
+      if (conflictingRole) {
+        const conflictLabel = ROLE_LABELS[conflictingRole] || conflictingRole;
+        setErrors({
+          general: `⚠️ This email is already registered as "${conflictLabel}". You cannot create a Customer account with the same email.`
+        });
+        setIsLoading(false);
+        return;
+      }
+
       const userCredential = await createUserWithEmailAndPassword(auth, signupData.email, signupData.password);
       await syncUser(userCredential.user);
       onClose();
       navigate('/dashboard');
     } catch (error) {
       console.error(error);
+      if (auth.currentUser) {
+        try { await auth.signOut(); } catch (_) {}
+      }
       setErrors({ general: error.message.replace('Firebase:', '') });
     } finally {
       setIsLoading(false);
@@ -127,13 +198,30 @@ const AuthModal = ({ isOpen, onClose, redirectPath }) => {
 
   const handleGoogleLogin = async () => {
     setIsLoading(true);
+    setErrors({});
     try {
       const result = await signInWithPopup(auth, googleProvider);
+      
+      // ─── ROLE EXCLUSIVITY CHECK ───
+      const conflictingRole = await checkRoleExclusivity(result.user.email);
+      if (conflictingRole) {
+        await auth.signOut();
+        const conflictLabel = ROLE_LABELS[conflictingRole] || conflictingRole;
+        setErrors({
+          general: `⚠️ This Google account is already registered as "${conflictLabel}". You cannot sign in as a Customer with the same email.`
+        });
+        setIsLoading(false);
+        return;
+      }
+      
       await syncUser(result.user);
       onClose();
       navigate('/dashboard');
     } catch (error) {
       console.error(error);
+      if (auth.currentUser) {
+        try { await auth.signOut(); } catch (_) {}
+      }
       setErrors({ general: 'Google sign-in failed. Please try again.' });
     } finally {
       setIsLoading(false);
@@ -179,6 +267,12 @@ const AuthModal = ({ isOpen, onClose, redirectPath }) => {
 
         {/* Form Content */}
         <div className="p-6 max-h-[70vh] overflow-y-auto custom-scrollbar">
+
+          {/* Role Exclusivity Warning */}
+          <div className="mb-4 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-700 font-medium flex items-start gap-2">
+            <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
+            <span>Each email can only be registered under <strong>one role</strong>. If your email is already used as Admin or Partner, you cannot use it here.</span>
+          </div>
 
           {errors.general && (
             <div className="mb-4 p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600 font-semibold animate-shake">

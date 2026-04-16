@@ -111,20 +111,14 @@ const Navbar = () => {
               {!isAuthenticated ? (
                 <>
                   <button
-                    onClick={() => {
-                      setAuthRedirectPath('/dashboard');
-                      setIsAuthModalOpen(true);
-                    }}
+                    onClick={() => navigate('/login')}
                     className="px-5 py-2 font-semibold text-[#5D4037] hover:text-[#66BB6A] transition-all duration-300"
                   >
                     Login
                   </button>
                   <button
-                    onClick={() => {
-                      setAuthRedirectPath('/dashboard');
-                      setIsAuthModalOpen(true);
-                    }}
-                    className="px-6 py-2 bg-[#66BB6A] text-white font-semibold rounded-full hover:bg-[#4CAF50] transition-al\l duration-300 shadow-md flex items-center justify-center"
+                    onClick={() => navigate('/login')}
+                    className="px-6 py-2 bg-[#66BB6A] text-white font-semibold rounded-full hover:bg-[#4CAF50] transition-all duration-300 shadow-md flex items-center justify-center"
                   >
                     Book pickup
                   </button>
@@ -217,9 +211,8 @@ const Navbar = () => {
                   <>
                     <button
                       onClick={() => { 
-                        setAuthRedirectPath('/dashboard');
-                        setIsAuthModalOpen(true); 
                         setIsMenuOpen(false); 
+                        navigate('/login');
                       }}
                       className="w-full px-4 py-3 font-semibold text-[#5D4037] border border-[#66BB6A] rounded-lg hover:bg-[#E8F5E9] transition-colors"
                     >
@@ -227,9 +220,8 @@ const Navbar = () => {
                     </button>
                     <button
                       onClick={() => {
-                        setAuthRedirectPath('/book-pickup');
-                        setIsAuthModalOpen(true);
                         setIsMenuOpen(false);
+                        navigate('/login');
                       }}
                       className="w-full block text-center px-4 py-3 bg-[#66BB6A] text-white font-semibold rounded-lg hover:bg-[#5CA960] transition-colors"
                     >
